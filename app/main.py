@@ -7,7 +7,7 @@ from py_eureka_client.eureka_client import EurekaClient
 from app.core.redis_client import redis_client
 from app.routers.matches import router as matches_router
 
-EUREKA_SERVER = "----"
+EUREKA_SERVER = "https://eureka-server-1-ngbb.onrender.com"
 EUREKA_INSTANCE_HOST = "partidas-service"
 PORT = 8000
 
