@@ -1,4 +1,17 @@
 services:
+  eureka-server:
+    image: eureka-server:latest
+    build:
+      context: ../eureka-server
+    ports:
+      - "${EUREKA_PORT:-8762}:8762"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8762/eureka/apps || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
   redis:
     image: redis:7-alpine
     ports:
@@ -16,6 +29,10 @@ services:
       - "8000:8000"
     environment:
       REDIS_HOST: redis
+      EUREKA_SERVER: ${EUREKA_SERVER:-http://eureka-server:8762/eureka/}
+      EUREKA_INSTANCE_HOST: ${EUREKA_INSTANCE_HOST:-localhost}
     depends_on:
+      eureka-server:
+        condition: service_healthy
       redis:
         condition: service_healthy

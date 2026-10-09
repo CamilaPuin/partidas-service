@@ -10,21 +10,25 @@ from app.routers.matches import router as matches_router
 
 EUREKA_SERVER = os.getenv(
     "EUREKA_SERVER",
-    "https://eureka-server-1-ngbb.onrender.com/eureka/",
+    "http://localhost:8762/eureka/",
 )
 
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 EUREKA_INSTANCE_HOST = os.getenv(
     "EUREKA_INSTANCE_HOST",
-    RENDER_EXTERNAL_HOSTNAME or "partidas-service",
+    RENDER_EXTERNAL_HOSTNAME or "localhost",
 )
-PORT = int(os.getenv("PORT", "10000"))
+PORT = int(os.getenv("PORT", "8000"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     is_render = bool(RENDER_EXTERNAL_HOSTNAME)
-    public_base_url = f"https://{EUREKA_INSTANCE_HOST}" if is_render else f"http://localhost:{PORT}"
+    public_base_url = (
+        f"https://{EUREKA_INSTANCE_HOST}"
+        if is_render
+        else f"http://{EUREKA_INSTANCE_HOST}:{PORT}"
+    )
     
     eureka_client = EurekaClient(
         eureka_server=EUREKA_SERVER,
