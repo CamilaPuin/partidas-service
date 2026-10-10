@@ -2,7 +2,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:?Define REDIS_PORT in .env}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -13,11 +13,11 @@ services:
     image: partidas-service:latest
     build: .
     ports:
-      - "8000:8000"
+      - "${PARTIDAS_PORT:?Define PARTIDAS_PORT in .env}:8000"
     environment:
       REDIS_HOST: redis
-      EUREKA_SERVER: ${EUREKA_SERVER:-http://host.docker.internal:8762/eureka/}
-      EUREKA_INSTANCE_HOST: ${EUREKA_INSTANCE_HOST:-host.docker.internal}
+      EUREKA_SERVER: ${EUREKA_SERVER:?Define EUREKA_SERVER in .env}
+      EUREKA_INSTANCE_HOST: ${EUREKA_INSTANCE_HOST:?Define EUREKA_INSTANCE_HOST in .env}
     depends_on:
       redis:
         condition: service_healthy

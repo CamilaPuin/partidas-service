@@ -9,10 +9,8 @@ from app.core.redis_client import redis_client
 from app.routers.matches import router as matches_router
 
 EUREKA_SERVER = os.getenv(
-    "EUREKA_SERVER",
-    "http://localhost:8762/eureka/",
+    "EUREKA_SERVER"
 )
-
 
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 EUREKA_INSTANCE_HOST = os.getenv(
