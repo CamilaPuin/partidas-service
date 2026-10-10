@@ -13,6 +13,7 @@ EUREKA_SERVER = os.getenv(
     "http://localhost:8762/eureka/",
 )
 
+
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 EUREKA_INSTANCE_HOST = os.getenv(
     "EUREKA_INSTANCE_HOST",
