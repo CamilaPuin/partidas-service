@@ -17,7 +17,7 @@ services:
     environment:
       REDIS_HOST: redis
       EUREKA_SERVER: ${EUREKA_SERVER:?Define EUREKA_SERVER in .env}
-      EUREKA_INSTANCE_HOST: ${EUREKA_INSTANCE_HOST:?Define EUREKA_INSTANCE_HOST in .env}
+      EUREKA_INSTANCE_HOST: ${EUREKA_INSTANCE_HOST:-localhost}
     depends_on:
       redis:
         condition: service_healthy

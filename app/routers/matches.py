@@ -75,7 +75,7 @@ def report_progress(match_id: str, request: ProgressRequest):
     return match_service.report_progress(match_id, request)
 
 
-@router.post("/matches/versus/{match_id}/progress")
+@router.get("/matches/versus/{match_id}/progress")
 def get_versus_progress(
     match_id: str,
     request: VersusProgressRequest,
