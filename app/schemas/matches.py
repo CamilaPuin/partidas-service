@@ -6,16 +6,10 @@ from pydantic import BaseModel
 class TimedMatchRequest(BaseModel):
     caseId: str
     timeLimitSeconds: int
-    userId: str
 
 
 class VersusMatchRequest(BaseModel):
     caseId: str
-    userId: str
-
-
-class JoinMatchRequest(BaseModel):
-    userId: str
 
 
 class MatchDTO(BaseModel):
@@ -24,13 +18,12 @@ class MatchDTO(BaseModel):
     status: Optional[str] = None
     startedAt: Optional[int] = None
     deadline: Optional[int] = None
-    player1: Optional[str] = None
-    player2: Optional[str] = None
+    player1: Optional[int] = None
+    player2: Optional[int] = None
 
 
 class SolutionDTO(BaseModel):
-    userId: str
-    isCorrect: bool
+    positions: list[int]
 
 
 class ResultDTO(BaseModel):
@@ -41,27 +34,17 @@ class ResultDTO(BaseModel):
 
 
 class VersusResultDTO(BaseModel):
-    winnerId: str
+    winnerId: int
     matchId: str
     xpDelta: int
 
 
 class ProgressRequest(BaseModel):
-    userId: str
     progress: float
 
 
-class VersusProgressRequest(BaseModel):
-    userId: str
-    rivalId: str
-
-
-class MatchHistoryRequest(BaseModel):
-    userId: str
-
-
 class RankingEntryDTO(BaseModel):
-    userId: str
+    userId: int
     score: int
 
 
