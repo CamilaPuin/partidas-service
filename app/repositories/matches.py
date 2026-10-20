@@ -4,6 +4,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import redis
 
 
+FINISHED_MATCH_TTL_SECONDS = 30 * 24 * 60 * 60
+
+
 class MatchRepository:
     def __init__(self, client: redis.Redis):
         self.client = client
@@ -14,6 +17,41 @@ class MatchRepository:
 
     def save_match(self, match_id: str, match_data: Dict[str, Any]) -> None:
         self.client.set(f"match:{match_id}", json.dumps(match_data))
+
+    def complete_match(
+        self,
+        match_id: str,
+        expected_status: str,
+        match_data: Dict[str, Any],
+    ) -> bool:
+        key = f"match:{match_id}"
+        with self.client.pipeline() as pipeline:
+            try:
+                pipeline.watch(key)
+                raw_match = pipeline.get(key)
+                if not raw_match:
+                    pipeline.unwatch()
+                    return False
+
+                current_match = json.loads(raw_match)
+                if current_match.get("status") != expected_status:
+                    pipeline.unwatch()
+                    return False
+
+                pipeline.multi()
+                pipeline.set(
+                    key,
+                    json.dumps(match_data),
+                    ex=FINISHED_MATCH_TTL_SECONDS,
+                )
+                pipeline.expire(
+                    f"match:{match_id}:progress",
+                    FINISHED_MATCH_TTL_SECONDS,
+                )
+                pipeline.execute()
+                return True
+            except redis.WatchError:
+                return False
 
     def add_open_match(self, match_id: str) -> None:
         self.client.sadd("matches:open", match_id)

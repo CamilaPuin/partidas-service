@@ -22,6 +22,11 @@ PORT = int(os.getenv("PORT", "8000"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not EUREKA_SERVER:
+        raise RuntimeError(
+            "EUREKA_SERVER no está configurado; define la URL del servidor Eureka."
+        )
+
     is_render = bool(RENDER_EXTERNAL_HOSTNAME)
     public_base_url = (
         f"https://{EUREKA_INSTANCE_HOST}"

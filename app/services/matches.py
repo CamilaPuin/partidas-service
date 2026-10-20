@@ -73,8 +73,8 @@ class MatchService:
             raise MatchNotFound
         if match_data["player1"] != str(user_id):
             raise OwnMatch
-        if match_data.get("status") == "FINISHED":
-            return ResultDTO(**match_data["finalResult"])
+        if match_data.get("status") != "IN_PROGRESS":
+            raise MatchUnavailable
 
         now = int(time.time())
         time_taken = now - match_data["startedAt"]
@@ -95,6 +95,15 @@ class MatchService:
                 xpDelta=50 + bonus,
             )
 
+        match_data["status"] = "FINISHED"
+        match_data["finalResult"] = result.model_dump()
+        if not self.repository.complete_match(
+            match_id,
+            "IN_PROGRESS",
+            match_data,
+        ):
+            raise MatchUnavailable
+
         register_user_result(
             user_id,
             match_data["caseId"],
@@ -114,9 +123,6 @@ class MatchService:
                 "timestamp": now,
             },
         )
-        match_data["status"] = "FINISHED"
-        match_data["finalResult"] = result.dict()
-        self.repository.save_match(match_id, match_data)
         return result
 
     def create_versus_match(
@@ -213,12 +219,6 @@ class MatchService:
         player_id = str(user_id)
         if player_id not in (match_data["player1"], match_data["player2"]):
             raise OwnMatch
-        if match_data["status"] == "FINISHED":
-            return VersusResultDTO(
-                winnerId=int(match_data["winnerId"]),
-                matchId=match_id,
-                xpDelta=100 if player_id == match_data["winnerId"] else 0,
-            )
         if match_data["status"] != "IN_PROGRESS":
             raise MatchUnavailable
         if not validate_case(match_data["caseId"], solution.positions):
@@ -227,6 +227,13 @@ class MatchService:
         winner_id = player_id
         match_data["status"] = "FINISHED"
         match_data["winnerId"] = winner_id
+        if not self.repository.complete_match(
+            match_id,
+            "IN_PROGRESS",
+            match_data,
+        ):
+            raise MatchUnavailable
+
         now = int(time.time())
         time_taken = now - match_data["startedAt"]
         players = [match_data["player1"], match_data["player2"]]
@@ -259,7 +266,6 @@ class MatchService:
                 )
                 if won:
                     self.repository.increment_score(player, xp_delta)
-        self.repository.save_match(match_id, match_data)
         return VersusResultDTO(
             winnerId=int(winner_id),
             matchId=match_id,
@@ -269,8 +275,8 @@ class MatchService:
     def get_ranking(self, limit: int) -> List[RankingEntryDTO]:
         entries = self.repository.list_ranking(limit)
         return [
-            RankingEntryDTO(userId=int(user_id), score=int(score))
-            for user_id, score in entries
+            RankingEntryDTO(userId=int(user_id), score=int(score), rank=index)
+            for index, (user_id, score) in enumerate(entries, start=1)
         ]
 
     def get_user_history(self, user_id: int) -> List[MatchResultDTO]:

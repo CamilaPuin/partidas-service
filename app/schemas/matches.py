@@ -46,6 +46,7 @@ class ProgressRequest(BaseModel):
 class RankingEntryDTO(BaseModel):
     userId: int
     score: int
+    rank: int
 
 
 class MatchResultDTO(BaseModel):
