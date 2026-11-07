@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from typing import List
 
 from app.core.redis_client import redis_client
-from app.core.service_clients import ServiceIntegrationError
+from app.core.service_clients import CasesServiceError, ServiceIntegrationError
 from app.repositories.matches import MatchRepository
 from app.schemas.matches import (
     MatchDTO,
@@ -36,7 +36,7 @@ def get_current_user_id(
             detail="El encabezado X-User-Id es obligatorio",
         )
     try:
-        return int(x_user_id)
+        return int(x_user_id.strip())
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -72,7 +72,8 @@ def create_timed_match(
         404: {"description": "Partida no encontrada"},
         200: {"description": "Resultado final de la partida"},
         422: {"description": "Solicitud inválida"},
-        502: {"description": "Error al validar o registrar el resultado"},
+        502: {"description": "Error al registrar el resultado en usuarios"},
+        503: {"description": "Casos no disponible o respuesta de validación inválida"},
     },
 )
 def finish_timed_match(
@@ -90,6 +91,8 @@ def finish_timed_match(
         raise HTTPException(status_code=403, detail="No perteneces a esta partida") from exc
     except MatchUnavailable as exc:
         raise HTTPException(status_code=400, detail="La partida ya terminó") from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ServiceIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -211,7 +214,8 @@ def get_versus_progress(
         404: {"description": "Partida no encontrada"},
         200: {"description": "Ganador de la partida"},
         422: {"description": "Solicitud inválida"},
-        502: {"description": "Error al validar o registrar el resultado"},
+        502: {"description": "Error al registrar el resultado en usuarios"},
+        503: {"description": "Casos no disponible o respuesta de validación inválida"},
     },
 )
 def submit_versus_solution(
@@ -229,6 +233,8 @@ def submit_versus_solution(
         raise HTTPException(status_code=403, detail="No perteneces a esta partida") from exc
     except MatchUnavailable as exc:
         raise HTTPException(status_code=400, detail="La partida no está en curso") from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ServiceIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
