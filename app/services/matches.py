@@ -199,11 +199,25 @@ class MatchService:
         self,
         match_id: str,
         me_id: int,
-        rival_id: int,
     ) -> dict:
+        match_data = self.repository.get_match(match_id)
+        if not match_data:
+            raise MatchNotFound
+
+        me_id_string = str(me_id)
+        if match_data.get("player1") == me_id_string:
+            rival_id = match_data.get("player2")
+        elif match_data.get("player2") == me_id_string:
+            rival_id = match_data.get("player1")
+        else:
+            raise OwnMatch
+
+        if not rival_id:
+            raise MatchUnavailable
+
         return {
-            "me": self.repository.get_progress(match_id, str(me_id)),
-            "rival": self.repository.get_progress(match_id, str(rival_id)),
+            "me": self.repository.get_progress(match_id, me_id_string),
+            "rival": self.repository.get_progress(match_id, rival_id),
         }
 
     def submit_versus_solution(

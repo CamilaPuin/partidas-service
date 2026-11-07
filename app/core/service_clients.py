@@ -73,10 +73,15 @@ def post_service_json(
     expect_json: bool = False,
 ) -> Any:
     service_url = _service_url(service_name)
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if service_name.upper() == "USUARIOS-SERVICE":
+        internal_token = os.getenv("INTERNAL_API_TOKEN")
+        if internal_token:
+            headers["X-Internal-Token"] = internal_token
     request = Request(
         f"{service_url}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
