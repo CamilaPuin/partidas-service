@@ -10,6 +10,10 @@ class ServiceIntegrationError(Exception):
     pass
 
 
+class CasesServiceError(ServiceIntegrationError):
+    pass
+
+
 def _eureka_registry_url() -> str:
     eureka_server = os.getenv("EUREKA_SERVER")
     if not eureka_server:
@@ -73,14 +77,25 @@ def post_service_json(
     expect_json: bool = False,
 ) -> Any:
     service_url = _service_url(service_name)
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    service_name_upper = service_name.upper()
+    if service_name_upper == "CASOS-SERVICE":
+        gateway_secret = os.getenv("GATEWAY_SECRET")
+        if not gateway_secret:
+            raise CasesServiceError("GATEWAY_SECRET no está configurado")
+        headers["X-Gateway-Secret"] = gateway_secret
+    if service_name_upper == "USUARIOS-SERVICE":
+        internal_token = os.getenv("INTERNAL_API_TOKEN")
+        if internal_token:
+            headers["X-Internal-Token"] = internal_token
     request = Request(
         f"{service_url}{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
-        with urlopen(request, timeout=10) as response:
+        with urlopen(request, timeout=_http_timeout_seconds()) as response:
             body = response.read()
     except (HTTPError, URLError, TimeoutError) as exc:
         raise ServiceIntegrationError(
@@ -97,20 +112,40 @@ def post_service_json(
         ) from exc
 
 
-def validate_case(case_id: str, positions: list[int]) -> bool:
-    response = post_service_json(
-        "CASOS-SERVICE",
-        f"/cases/{quote(case_id, safe='')}/validate",
-        {"positions": positions},
-        expect_json=True,
-    )
-    if isinstance(response, bool):
-        return response
+def _http_timeout_seconds() -> float:
+    try:
+        timeout = float(os.getenv("SERVICE_HTTP_TIMEOUT_SECONDS", "5"))
+    except ValueError as exc:
+        raise ServiceIntegrationError(
+            "SERVICE_HTTP_TIMEOUT_SECONDS debe ser un número positivo"
+        ) from exc
+    if timeout <= 0:
+        raise ServiceIntegrationError(
+            "SERVICE_HTTP_TIMEOUT_SECONDS debe ser un número positivo"
+        )
+    return timeout
+
+
+def validate_case(case_id: str, positions: list[Any]) -> bool:
+    try:
+        response = post_service_json(
+            "CASOS-SERVICE",
+            f"/cases/{quote(case_id, safe='')}/validate",
+            {
+                "positions": [
+                    position.model_dump() if hasattr(position, "model_dump") else position
+                    for position in positions
+                ]
+            },
+            expect_json=True,
+        )
+    except ServiceIntegrationError as exc:
+        raise CasesServiceError(f"CASOS-SERVICE no pudo validar la solución: {exc}") from exc
     if isinstance(response, dict):
-        for result_key in ("isCorrect", "correct", "valid", "isValid"):
-            if isinstance(response.get(result_key), bool):
-                return response[result_key]
-    raise ServiceIntegrationError(
+        valid = response.get("valid")
+        if isinstance(valid, bool):
+            return valid
+    raise CasesServiceError(
         "CASOS-SERVICE devolvió una respuesta de validación inesperada"
     )
 

@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt, StrictStr, StringConstraints
 
 
 class TimedMatchRequest(BaseModel):
@@ -22,8 +22,14 @@ class MatchDTO(BaseModel):
     player2: Optional[int] = None
 
 
+class PositionDTO(BaseModel):
+    characterId: Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
+    x: Annotated[StrictInt, Field(ge=0)]
+    y: Annotated[StrictInt, Field(ge=0)]
+
+
 class SolutionDTO(BaseModel):
-    positions: list[int]
+    positions: Annotated[list[PositionDTO], Field(min_length=1)]
 
 
 class ResultDTO(BaseModel):

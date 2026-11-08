@@ -21,7 +21,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       EUREKA_SERVER: ${EUREKA_SERVER:?Define EUREKA_SERVER in .env}
-      EUREKA_INSTANCE_HOST: ${EUREKA_INSTANCE_HOST:-localhost}
+      EUREKA_INSTANCE_HOST: ${EUREKA_INSTANCE_HOST:-partidas-service}
     depends_on:
       redis:
         condition: service_healthy

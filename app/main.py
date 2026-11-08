@@ -15,7 +15,7 @@ EUREKA_SERVER = os.getenv(
 RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 EUREKA_INSTANCE_HOST = os.getenv(
     "EUREKA_INSTANCE_HOST",
-    RENDER_EXTERNAL_HOSTNAME or "localhost",
+    RENDER_EXTERNAL_HOSTNAME or "partidas-service",
 )
 PORT = int(os.getenv("PORT", "8000"))
 

@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from typing import List
 
 from app.core.redis_client import redis_client
-from app.core.service_clients import ServiceIntegrationError
+from app.core.service_clients import CasesServiceError, ServiceIntegrationError
 from app.repositories.matches import MatchRepository
 from app.schemas.matches import (
     MatchDTO,
@@ -27,6 +27,23 @@ router = APIRouter()
 match_service = MatchService(MatchRepository(redis_client))
 
 
+def get_current_user_id(
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> int:
+    if x_user_id is None or not x_user_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="El encabezado X-User-Id es obligatorio",
+        )
+    try:
+        return int(x_user_id.strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="El encabezado X-User-Id debe contener un identificador numérico",
+        ) from exc
+
+
 @router.post(
     "/matches/timed",
     response_model=MatchDTO,
@@ -39,7 +56,7 @@ match_service = MatchService(MatchRepository(redis_client))
 )
 def create_timed_match(
     request: TimedMatchRequest,
-    user_id: int = Header(..., alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
 ):
     return match_service.create_timed_match(request, user_id)
 
@@ -55,13 +72,14 @@ def create_timed_match(
         404: {"description": "Partida no encontrada"},
         200: {"description": "Resultado final de la partida"},
         422: {"description": "Solicitud inválida"},
-        502: {"description": "Error al validar o registrar el resultado"},
+        502: {"description": "Error al registrar el resultado en usuarios"},
+        503: {"description": "Casos no disponible o respuesta de validación inválida"},
     },
 )
 def finish_timed_match(
     match_id: str,
     solution: SolutionDTO,
-    user_id: int = Header(..., alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
 ):
     try:
         return match_service.finish_timed_match(match_id, user_id, solution)
@@ -73,6 +91,8 @@ def finish_timed_match(
         raise HTTPException(status_code=403, detail="No perteneces a esta partida") from exc
     except MatchUnavailable as exc:
         raise HTTPException(status_code=400, detail="La partida ya terminó") from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ServiceIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -89,7 +109,7 @@ def finish_timed_match(
 )
 def create_versus_match(
     request: VersusMatchRequest,
-    user_id: int = Header(..., alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
 ):
     return match_service.create_versus_match(request, user_id)
 
@@ -101,7 +121,7 @@ def create_versus_match(
     summary="Listar partidas versus disponibles",
     responses={200: {"description": "Partidas disponibles"}},
 )
-def list_open_matches():
+def list_open_matches(_user_id: int = Depends(get_current_user_id)):
     return match_service.list_open_matches()
 
 
@@ -119,7 +139,7 @@ def list_open_matches():
 )
 def join_versus_match(
     match_id: str,
-    user_id: int = Header(..., alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
 ):
     try:
         return match_service.join_versus_match(match_id, user_id)
@@ -149,7 +169,7 @@ def join_versus_match(
 def report_progress(
     match_id: str,
     request: ProgressRequest,
-    user_id: int = Header(..., alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
 ):
     return match_service.report_progress(match_id, user_id, request)
 
@@ -165,14 +185,22 @@ def report_progress(
 )
 def get_versus_progress(
     match_id: str,
-    rival_id: int = Query(..., alias="rivalId"),
-    user_id: int = Header(..., alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
 ):
-    return match_service.get_versus_progress(
-        match_id,
-        user_id,
-        rival_id,
-    )
+    try:
+        return match_service.get_versus_progress(match_id, user_id)
+    except MatchNotFound as exc:
+        raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
+    except OwnMatch as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="No perteneces a esta partida",
+        ) from exc
+    except MatchUnavailable as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="La partida aún no tiene dos participantes",
+        ) from exc
 
 
 @router.post(
@@ -186,13 +214,14 @@ def get_versus_progress(
         404: {"description": "Partida no encontrada"},
         200: {"description": "Ganador de la partida"},
         422: {"description": "Solicitud inválida"},
-        502: {"description": "Error al validar o registrar el resultado"},
+        502: {"description": "Error al registrar el resultado en usuarios"},
+        503: {"description": "Casos no disponible o respuesta de validación inválida"},
     },
 )
 def submit_versus_solution(
     match_id: str,
     solution: SolutionDTO,
-    user_id: int = Header(..., alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
 ):
     try:
         return match_service.submit_versus_solution(match_id, user_id, solution)
@@ -204,6 +233,8 @@ def submit_versus_solution(
         raise HTTPException(status_code=403, detail="No perteneces a esta partida") from exc
     except MatchUnavailable as exc:
         raise HTTPException(status_code=400, detail="La partida no está en curso") from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ServiceIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -218,7 +249,10 @@ def submit_versus_solution(
         422: {"description": "Límite inválido"},
     },
 )
-def get_ranking(limit: int = Query(10)):
+def get_ranking(
+    limit: int = Query(10),
+    _user_id: int = Depends(get_current_user_id),
+):
     return match_service.get_ranking(limit)
 
 
@@ -232,5 +266,5 @@ def get_ranking(limit: int = Query(10)):
         422: {"description": "Encabezado X-User-Id inválido"},
     },
 )
-def get_my_history(user_id: int = Header(..., alias="X-User-Id")):
+def get_my_history(user_id: int = Depends(get_current_user_id)):
     return match_service.get_user_history(user_id)
