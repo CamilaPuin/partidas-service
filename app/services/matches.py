@@ -40,7 +40,7 @@ class MatchService:
     def create_timed_match(
         self,
         request: TimedMatchRequest,
-        user_id: int,
+        user_id: str,
     ) -> MatchDTO:
         match_id = str(uuid.uuid4())
         now = int(time.time())
@@ -52,7 +52,7 @@ class MatchService:
             "deadline": deadline,
             "mode": "TIMED",
             "status": "IN_PROGRESS",
-            "player1": str(user_id),
+            "player1": user_id,
         }
         self.repository.save_match(match_id, match_data)
         return MatchDTO(
@@ -65,13 +65,13 @@ class MatchService:
     def finish_timed_match(
         self,
         match_id: str,
-        user_id: int,
+        user_id: str,
         solution: SolutionDTO,
     ) -> ResultDTO:
         match_data = self.repository.get_match(match_id)
         if not match_data:
             raise MatchNotFound
-        if match_data["player1"] != str(user_id):
+        if match_data["player1"] != user_id:
             raise OwnMatch
         if match_data.get("status") != "IN_PROGRESS":
             raise MatchUnavailable
@@ -112,9 +112,9 @@ class MatchService:
             time_taken,
             result.xpDelta,
         )
-        self.repository.increment_score(str(user_id), result.xpDelta)
+        self.repository.increment_score(user_id, result.xpDelta)
         self.repository.save_user_history(
-            str(user_id),
+            user_id,
             {
                 "matchId": match_id,
                 "mode": "TIMED",
@@ -128,14 +128,14 @@ class MatchService:
     def create_versus_match(
         self,
         request: VersusMatchRequest,
-        user_id: int,
+        user_id: str,
     ) -> MatchDTO:
         match_id = str(uuid.uuid4())
         match_data = {
             "matchId": match_id,
             "caseId": request.caseId,
             "status": "WAITING",
-            "player1": str(user_id),
+            "player1": user_id,
             "player2": None,
             "winnerId": None,
             "mode": "VERSUS",
@@ -159,21 +159,21 @@ class MatchService:
                         matchId=data["matchId"],
                         caseId=data["caseId"],
                         status=data["status"],
-                        player1=int(data["player1"]) if data.get("player1") else None,
+                        player1=data.get("player1"),
                     )
                 )
         return matches
 
-    def join_versus_match(self, match_id: str, user_id: int) -> MatchDTO:
+    def join_versus_match(self, match_id: str, user_id: str) -> MatchDTO:
         match_data = self.repository.get_match(match_id)
         if not match_data:
             raise MatchNotFound
         if match_data["status"] != "WAITING":
             raise MatchUnavailable
-        if match_data["player1"] == str(user_id):
+        if match_data["player1"] == user_id:
             raise OwnMatch
 
-        match_data["player2"] = str(user_id)
+        match_data["player2"] = user_id
         match_data["status"] = "IN_PROGRESS"
         match_data["startedAt"] = int(time.time())
         self.repository.save_match(match_id, match_data)
@@ -182,29 +182,29 @@ class MatchService:
             matchId=match_id,
             caseId=match_data["caseId"],
             status="IN_PROGRESS",
-            player1=int(match_data["player1"]),
+            player1=match_data["player1"],
             player2=user_id,
         )
 
     def report_progress(
         self,
         match_id: str,
-        user_id: int,
+        user_id: str,
         request: ProgressRequest,
     ) -> dict:
-        self.repository.save_progress(match_id, str(user_id), request.progress)
+        self.repository.save_progress(match_id, user_id, request.progress)
         return {"ok": True}
 
     def get_versus_progress(
         self,
         match_id: str,
-        me_id: int,
+        me_id: str,
     ) -> dict:
         match_data = self.repository.get_match(match_id)
         if not match_data:
             raise MatchNotFound
 
-        me_id_string = str(me_id)
+        me_id_string = me_id
         if match_data.get("player1") == me_id_string:
             rival_id = match_data.get("player2")
         elif match_data.get("player2") == me_id_string:
@@ -223,14 +223,14 @@ class MatchService:
     def submit_versus_solution(
         self,
         match_id: str,
-        user_id: int,
+        user_id: str,
         solution: SolutionDTO,
     ) -> VersusResultDTO:
         match_data = self.repository.get_match(match_id)
         if not match_data:
             raise MatchNotFound
 
-        player_id = str(user_id)
+        player_id = user_id
         if player_id not in (match_data["player1"], match_data["player2"]):
             raise OwnMatch
         if match_data["status"] != "IN_PROGRESS":
@@ -256,7 +256,7 @@ class MatchService:
                 won = player == winner_id
                 xp_delta = 100 if won else 0
                 register_user_result(
-                    int(player),
+                    player,
                     match_data["caseId"],
                     "VERSUS",
                     won,
@@ -281,7 +281,7 @@ class MatchService:
                 if won:
                     self.repository.increment_score(player, xp_delta)
         return VersusResultDTO(
-            winnerId=int(winner_id),
+            winnerId=winner_id,
             matchId=match_id,
             xpDelta=100,
         )
@@ -289,12 +289,12 @@ class MatchService:
     def get_ranking(self, limit: int) -> List[RankingEntryDTO]:
         entries = self.repository.list_ranking(limit)
         return [
-            RankingEntryDTO(userId=int(user_id), score=int(score), rank=index)
+            RankingEntryDTO(userId=user_id, score=int(score), rank=index)
             for index, (user_id, score) in enumerate(entries, start=1)
         ]
 
-    def get_user_history(self, user_id: int) -> List[MatchResultDTO]:
+    def get_user_history(self, user_id: str) -> List[MatchResultDTO]:
         return [
             MatchResultDTO(**entry)
-            for entry in self.repository.list_user_history(str(user_id))
+            for entry in self.repository.list_user_history(user_id)
         ]

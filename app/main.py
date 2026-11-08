@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from py_eureka_client.eureka_client import EurekaClient
 
 from app.core.redis_client import redis_client
+from app.core.gateway_security import GatewaySecretMiddleware, configured_gateway_secret
 from app.routers.matches import router as matches_router
 
 EUREKA_SERVER = os.getenv(
@@ -22,6 +23,7 @@ PORT = int(os.getenv("PORT", "8000"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configured_gateway_secret()
     if not EUREKA_SERVER:
         raise RuntimeError(
             "EUREKA_SERVER no está configurado; define la URL del servidor Eureka."
@@ -55,6 +57,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Partidas Service", lifespan=lifespan)
+app.add_middleware(GatewaySecretMiddleware)
 app.include_router(matches_router)
 
 
