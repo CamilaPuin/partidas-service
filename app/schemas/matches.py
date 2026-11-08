@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, StrictInt, StrictStr, StringConstraints
 
 class TimedMatchRequest(BaseModel):
     caseId: str
-    timeLimitSeconds: int
+    timeLimitSeconds: Annotated[int, Field(ge=60, le=3600)]
 
 
 class VersusMatchRequest(BaseModel):
@@ -18,8 +18,8 @@ class MatchDTO(BaseModel):
     status: Optional[str] = None
     startedAt: Optional[int] = None
     deadline: Optional[int] = None
-    player1: Optional[int] = None
-    player2: Optional[int] = None
+    player1: Optional[str] = None
+    player2: Optional[str] = None
 
 
 class PositionDTO(BaseModel):
@@ -40,7 +40,7 @@ class ResultDTO(BaseModel):
 
 
 class VersusResultDTO(BaseModel):
-    winnerId: int
+    winnerId: str
     matchId: str
     xpDelta: int
 
@@ -50,7 +50,7 @@ class ProgressRequest(BaseModel):
 
 
 class RankingEntryDTO(BaseModel):
-    userId: int
+    userId: str
     score: int
     rank: int
 

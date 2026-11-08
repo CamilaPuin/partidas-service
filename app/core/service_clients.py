@@ -86,8 +86,9 @@ def post_service_json(
         headers["X-Gateway-Secret"] = gateway_secret
     if service_name_upper == "USUARIOS-SERVICE":
         internal_token = os.getenv("INTERNAL_API_TOKEN")
-        if internal_token:
-            headers["X-Internal-Token"] = internal_token
+        if not internal_token:
+            raise ServiceIntegrationError("INTERNAL_API_TOKEN no está configurado")
+        headers["X-Internal-Token"] = internal_token
     request = Request(
         f"{service_url}{path}",
         data=json.dumps(payload).encode("utf-8"),
@@ -151,7 +152,7 @@ def validate_case(case_id: str, positions: list[Any]) -> bool:
 
 
 def register_user_result(
-    user_id: int,
+    user_id: str,
     case_id: str,
     mode: str,
     won: bool,
@@ -160,7 +161,7 @@ def register_user_result(
 ) -> None:
     post_service_json(
         "USUARIOS-SERVICE",
-        f"/users/{user_id}/results",
+        f"/users/{quote(user_id, safe='')}/results",
         {
             "caseId": case_id,
             "mode": mode,
