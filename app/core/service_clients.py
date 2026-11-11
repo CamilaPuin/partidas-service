@@ -151,7 +151,7 @@ def validate_case(case_id: str, positions: list[Any]) -> bool:
 
 
 def register_user_result(
-    user_id: int,
+    user_id: str,
     case_id: str,
     mode: str,
     won: bool,
@@ -160,7 +160,7 @@ def register_user_result(
 ) -> None:
     post_service_json(
         "USUARIOS-SERVICE",
-        f"/users/{user_id}/results",
+        f"/users/{quote(user_id, safe='')}/results",
         {
             "caseId": case_id,
             "mode": mode,

@@ -42,3 +42,30 @@ def test_validate_case_sends_positions_objects(monkeypatch):
     positions = [{"characterId": "V1", "x": 0, "y": 0}, {"characterId": "S1", "x": 1, "y": 0}]
     assert service_clients.validate_case("case-1", positions) is True
     assert seen["payload"] == {"positions": positions}
+
+
+def test_register_user_result_preserves_opaque_user_id(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "internal-test")
+    monkeypatch.setattr(service_clients, "_service_url", lambda _name: "http://usuarios-service:8081")
+    seen = {}
+
+    def fake_urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["token"] = request.get_header("X-internal-token")
+        return FakeResponse()
+
+    monkeypatch.setattr(service_clients, "urlopen", fake_urlopen)
+    service_clients.register_user_result(
+        "11111111-2222-4333-8444-555555555555",
+        "case-1",
+        "TIMED",
+        True,
+        12,
+        50,
+    )
+
+    assert seen["url"] == (
+        "http://usuarios-service:8081/users/"
+        "11111111-2222-4333-8444-555555555555/results"
+    )
+    assert seen["token"] == "internal-test"

@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from typing import List
 
@@ -25,23 +27,18 @@ from app.services.matches import (
 
 router = APIRouter()
 match_service = MatchService(MatchRepository(redis_client))
+EXTERNAL_ID_PATTERN = re.compile(r"[A-Za-z0-9-]{1,64}\Z")
 
 
 def get_current_user_id(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
-) -> int:
-    if x_user_id is None or not x_user_id.strip():
+) -> str:
+    if x_user_id is None or not EXTERNAL_ID_PATTERN.fullmatch(x_user_id):
         raise HTTPException(
-            status_code=400,
-            detail="El encabezado X-User-Id es obligatorio",
+            status_code=403,
+            detail="El encabezado X-User-Id es inválido",
         )
-    try:
-        return int(x_user_id.strip())
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="El encabezado X-User-Id debe contener un identificador numérico",
-        ) from exc
+    return x_user_id
 
 
 @router.post(
@@ -56,7 +53,7 @@ def get_current_user_id(
 )
 def create_timed_match(
     request: TimedMatchRequest,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     return match_service.create_timed_match(request, user_id)
 
@@ -79,7 +76,7 @@ def create_timed_match(
 def finish_timed_match(
     match_id: str,
     solution: SolutionDTO,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     try:
         return match_service.finish_timed_match(match_id, user_id, solution)
@@ -109,7 +106,7 @@ def finish_timed_match(
 )
 def create_versus_match(
     request: VersusMatchRequest,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     return match_service.create_versus_match(request, user_id)
 
@@ -121,7 +118,7 @@ def create_versus_match(
     summary="Listar partidas versus disponibles",
     responses={200: {"description": "Partidas disponibles"}},
 )
-def list_open_matches(_user_id: int = Depends(get_current_user_id)):
+def list_open_matches(_user_id: str = Depends(get_current_user_id)):
     return match_service.list_open_matches()
 
 
@@ -139,7 +136,7 @@ def list_open_matches(_user_id: int = Depends(get_current_user_id)):
 )
 def join_versus_match(
     match_id: str,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     try:
         return match_service.join_versus_match(match_id, user_id)
@@ -169,7 +166,7 @@ def join_versus_match(
 def report_progress(
     match_id: str,
     request: ProgressRequest,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     return match_service.report_progress(match_id, user_id, request)
 
@@ -185,7 +182,7 @@ def report_progress(
 )
 def get_versus_progress(
     match_id: str,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     try:
         return match_service.get_versus_progress(match_id, user_id)
@@ -221,7 +218,7 @@ def get_versus_progress(
 def submit_versus_solution(
     match_id: str,
     solution: SolutionDTO,
-    user_id: int = Depends(get_current_user_id),
+    user_id: str = Depends(get_current_user_id),
 ):
     try:
         return match_service.submit_versus_solution(match_id, user_id, solution)
@@ -251,7 +248,7 @@ def submit_versus_solution(
 )
 def get_ranking(
     limit: int = Query(10),
-    _user_id: int = Depends(get_current_user_id),
+    _user_id: str = Depends(get_current_user_id),
 ):
     return match_service.get_ranking(limit)
 
@@ -263,8 +260,8 @@ def get_ranking(
     summary="Consultar historial del usuario actual",
     responses={
         200: {"description": "Historial de partidas del usuario"},
-        422: {"description": "Encabezado X-User-Id inválido"},
+        403: {"description": "Encabezado X-User-Id inválido"},
     },
 )
-def get_my_history(user_id: int = Depends(get_current_user_id)):
+def get_my_history(user_id: str = Depends(get_current_user_id)):
     return match_service.get_user_history(user_id)
