@@ -2,3 +2,4 @@ fastapi
 uvicorn[standard]
 redis
 py-eureka-client
+aiokafka==0.15.0
