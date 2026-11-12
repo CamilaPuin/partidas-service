@@ -2,8 +2,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from typing import List
 import re
 
+from app.application.timed_matches import CreateTimedMatch, FinishTimedMatch
 from app.core.redis_client import redis_client
 from app.core.service_clients import CasesServiceError, ServiceIntegrationError
+from app.infrastructure.adapters.timed_match import (
+    CasesHttpAdapter,
+    SystemClock,
+    UsersHttpAdapter,
+    UuidMatchIdGenerator,
+)
 from app.repositories.matches import MatchRepository
 from app.schemas.matches import (
     MatchDTO,
@@ -31,7 +38,19 @@ router = APIRouter(
         }
     }
 )
-match_service = MatchService(MatchRepository(redis_client))
+match_repository = MatchRepository(redis_client)
+match_service = MatchService(match_repository)
+create_timed_match_use_case = CreateTimedMatch(
+    store=match_repository,
+    clock=SystemClock(),
+    ids=UuidMatchIdGenerator(),
+)
+finish_timed_match_use_case = FinishTimedMatch(
+    store=match_repository,
+    cases=CasesHttpAdapter(),
+    users=UsersHttpAdapter(),
+    clock=SystemClock(),
+)
 EXTERNAL_ID_PATTERN = re.compile(r"[A-Za-z0-9-]{1,64}\Z")
 
 
@@ -60,7 +79,11 @@ def create_timed_match(
     request: TimedMatchRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    return match_service.create_timed_match(request, user_id)
+    return create_timed_match_use_case.execute(
+        request.caseId,
+        request.timeLimitSeconds,
+        user_id,
+    )
 
 
 @router.post(
@@ -84,7 +107,11 @@ def finish_timed_match(
     user_id: str = Depends(get_current_user_id),
 ):
     try:
-        return match_service.finish_timed_match(match_id, user_id, solution)
+        return finish_timed_match_use_case.execute(
+            match_id,
+            user_id,
+            solution.positions,
+        )
     except MatchNotFound as exc:
         raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
     except IncorrectSolution as exc:
