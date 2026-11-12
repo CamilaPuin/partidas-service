@@ -26,6 +26,10 @@ def is_health_request(method: str, path: str) -> bool:
     return method == "GET" and path == "/health"
 
 
+def is_metrics_request(method: str, path: str) -> bool:
+    return method == "GET" and path == "/metrics"
+
+
 class GatewaySecretMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
@@ -36,7 +40,9 @@ class GatewaySecretMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
-        if is_health_request(request.method, request.url.path):
+        if is_health_request(request.method, request.url.path) or is_metrics_request(
+            request.method, request.url.path
+        ):
             return await call_next(request)
 
         received = request.headers.get("X-Gateway-Secret")

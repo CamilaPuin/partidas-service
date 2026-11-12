@@ -2,3 +2,4 @@ fastapi
 uvicorn[standard]
 redis
 py-eureka-client
+prometheus-client

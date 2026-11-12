@@ -8,6 +8,8 @@ from py_eureka_client.eureka_client import EurekaClient
 from app.core.redis_client import redis_client
 from app.core.gateway_security import GatewaySecretMiddleware, configured_gateway_secret
 from app.routers.matches import router as matches_router
+from app.observability.http_metrics import HttpRequestMetricsMiddleware
+from app.observability.metrics_router import metrics_credentials, router as metrics_router
 
 EUREKA_SERVER = os.getenv(
     "EUREKA_SERVER"
@@ -24,6 +26,7 @@ PORT = int(os.getenv("PORT", "8000"))
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configured_gateway_secret()
+    metrics_credentials()
     if not EUREKA_SERVER:
         raise RuntimeError(
             "EUREKA_SERVER no está configurado; define la URL del servidor Eureka."
@@ -58,7 +61,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Partidas Service", lifespan=lifespan)
 app.add_middleware(GatewaySecretMiddleware)
+app.add_middleware(HttpRequestMetricsMiddleware)
 app.include_router(matches_router)
+app.include_router(metrics_router)
 
 
 @app.get("/health")
