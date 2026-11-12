@@ -1,0 +1,181 @@
+services:
+  postgres:
+    image: postgres:16.15-alpine
+    environment:
+      POSTGRES_DB: m6_users
+      POSTGRES_USER: m6_test
+      POSTGRES_PASSWORD: ${M6_DB_PASSWORD:?Provide a generated test-only password}
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mongo:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: m6_test
+      MONGO_INITDB_ROOT_PASSWORD: ${M6_MONGO_PASSWORD:?Provide a generated test-only password}
+    tmpfs:
+      - /data/db
+      - /data/configdb
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - mongosh --quiet --username "$${MONGO_INITDB_ROOT_USERNAME}" --password "$${MONGO_INITDB_ROOT_PASSWORD}" --authenticationDatabase admin --eval "db.adminCommand('ping').ok"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:4.4.0
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_LISTENERS: "INTERNAL://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    tmpfs:
+      - /etc/kafka/secrets:uid=1000,gid=1000,mode=0755
+      - /mnt/shared/config:uid=1000,gid=1000,mode=0755
+      - /var/lib/kafka/data:uid=1000,gid=1000,mode=0755
+    mem_limit: 1g
+    healthcheck:
+      test:
+        - CMD
+        - /opt/kafka/bin/kafka-broker-api-versions.sh
+        - --bootstrap-server
+        - localhost:9092
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  eureka-server:
+    image: ${M6_EUREKA_IMAGE:-thedeathdoku-eureka-server:latest}
+    environment:
+      EUREKA_INSTANCE_HOSTNAME: eureka-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8762/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  casos-service:
+    image: ${M6_CASES_IMAGE:-thedeathdoku-casos-service:latest}
+    ports:
+      - "127.0.0.1::8082"
+    environment:
+      PORT: 8082
+      MONGO_URI: mongodb://m6_test:${M6_MONGO_PASSWORD:?Provide a generated test-only password}@mongo:27017/casos_m6?authSource=admin
+      EUREKA_HOST: eureka-server
+      EUREKA_PORT: 8762
+      SERVICE_HOST: casos-service
+      GATEWAY_SECRET: ${M6_GATEWAY_SECRET:?Provide a generated test-only secret}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_GROUP_ID: m6-casos-integration
+      KAFKA_POC_PING_ON_START: "false"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8082/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  usuarios-service:
+    build:
+      context: ${M6_USERS_SOURCE_DIR:?The runner must provide the pinned users source}
+    ports:
+      - "127.0.0.1::8081"
+    environment:
+      SERVER_PORT: 8081
+      DB_URL: jdbc:postgresql://postgres:5432/m6_users
+      DB_USERNAME: m6_test
+      DB_PASSWORD: ${M6_DB_PASSWORD:?Provide a generated test-only password}
+      EUREKA_SERVER_URL: http://eureka-server:8762/eureka/
+      EUREKA_INSTANCE_HOSTNAME: usuarios-service
+      INTERNAL_API_TOKEN: ${M6_INTERNAL_TOKEN:?Provide a generated test-only token}
+      GATEWAY_SECRET: ${M6_GATEWAY_SECRET:?Provide a generated test-only secret}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_GROUP_ID: m6-usuarios-integration
+      KAFKA_POC_PING_ON_START: "false"
+      SPRING_FLYWAY_ENABLED: "true"
+      JPA_DDL_AUTO: update
+    depends_on:
+      postgres:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  partidas-service:
+    build:
+      context: ../..
+    ports:
+      - "127.0.0.1::8000"
+    environment:
+      PORT: 8000
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      EUREKA_SERVER: http://eureka-server:8762/eureka/
+      EUREKA_INSTANCE_HOST: partidas-service
+      INTERNAL_API_TOKEN: ${M6_INTERNAL_TOKEN:?Provide a generated test-only token}
+      GATEWAY_SECRET: ${M6_GATEWAY_SECRET:?Provide a generated test-only secret}
+      SERVICE_HTTP_TIMEOUT_SECONDS: "10"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_GROUP_ID: m6-partidas-integration
+      KAFKA_POC_PING_ON_START: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      casos-service:
+        condition: service_healthy
+      usuarios-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
