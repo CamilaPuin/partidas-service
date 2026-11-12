@@ -1,10 +1,21 @@
+import json
 import time
 import uuid
 from typing import List
 
-from app.core.service_clients import register_user_result, validate_case
+from app.core.service_clients import (
+    CasesServiceError,
+    ServiceIntegrationError,
+    UserResultConflict,
+    get_case_difficulty,
+    register_user_result,
+    validate_case,
+)
 from app.repositories.matches import MatchRepository
 from app.schemas.matches import (
+    ClassicAttemptRequest,
+    ClassicAttemptResultDTO,
+    ClassicMatchRequest,
     MatchDTO,
     MatchResultDTO,
     ProgressRequest,
@@ -33,9 +44,178 @@ class IncorrectSolution(Exception):
     pass
 
 
+class MatchConflict(Exception):
+    pass
+
+
 class MatchService:
     def __init__(self, repository: MatchRepository):
         self.repository = repository
+
+    def create_classic_match(
+        self,
+        request: ClassicMatchRequest,
+        user_id: str,
+    ) -> MatchDTO:
+        difficulty = get_case_difficulty(request.caseId)
+        match_id = str(uuid.uuid4())
+        now = int(time.time())
+        match_data = {
+            "matchId": match_id,
+            "caseId": request.caseId,
+            "difficulty": difficulty,
+            "startedAt": now,
+            "mode": "CLASSIC",
+            "status": "IN_PROGRESS",
+            "player1": user_id,
+        }
+        self.repository.save_match(match_id, match_data)
+        return MatchDTO(
+            matchId=match_id,
+            caseId=request.caseId,
+            status="IN_PROGRESS",
+            startedAt=now,
+        )
+
+    def attempt_classic_match(
+        self,
+        match_id: str,
+        user_id: str,
+        request: ClassicAttemptRequest,
+    ) -> ClassicAttemptResultDTO:
+        match_data = self.repository.get_match(match_id)
+        if not match_data:
+            raise MatchNotFound
+        if match_data.get("mode") != "CLASSIC" or match_data.get("player1") != user_id:
+            raise OwnMatch
+
+        attempt_id = str(request.attemptId)
+        positions = sorted(
+            (position.model_dump() for position in request.positions),
+            key=lambda position: (
+                position["characterId"],
+                position["x"],
+                position["y"],
+            ),
+        )
+        fingerprint = json.dumps(positions, sort_keys=True, separators=(",", ":"))
+        reservation = self.repository.reserve_classic_attempt(
+            match_id,
+            attempt_id,
+            fingerprint,
+        )
+
+        action = reservation["action"]
+        if action == "not_found":
+            raise MatchNotFound
+        if action == "conflict":
+            raise MatchConflict
+        if action == "unavailable":
+            raise MatchUnavailable
+        if action == "replay":
+            return ClassicAttemptResultDTO(**reservation["result"])
+
+        match_data = reservation["match"]
+        if action == "validate":
+            try:
+                is_valid = validate_case(match_data["caseId"], request.positions)
+            except ServiceIntegrationError:
+                self.repository.release_classic_validation(
+                    match_id,
+                    attempt_id,
+                    fingerprint,
+                )
+                raise
+
+            if not is_valid:
+                result = {
+                    "attemptId": attempt_id,
+                    "valid": False,
+                    "status": "IN_PROGRESS",
+                }
+                completion = self.repository.finish_classic_incorrect_attempt(
+                    match_id,
+                    attempt_id,
+                    fingerprint,
+                    result,
+                )
+                if completion["action"] == "replay":
+                    return ClassicAttemptResultDTO(**completion["result"])
+                if completion["action"] == "conflict":
+                    raise MatchConflict
+                if completion["action"] != "stored":
+                    raise MatchUnavailable
+                return ClassicAttemptResultDTO(**result)
+
+            finalized_at = int(time.time())
+            time_taken = max(0, finalized_at - match_data["startedAt"])
+            finalizing = self.repository.mark_classic_finalizing(
+                match_id,
+                attempt_id,
+                fingerprint,
+                time_taken,
+                finalized_at,
+            )
+            if finalizing["action"] == "replay":
+                return ClassicAttemptResultDTO(**finalizing["result"])
+            if finalizing["action"] == "not_found":
+                raise MatchNotFound
+            if finalizing["action"] == "conflict":
+                raise MatchConflict
+            if finalizing["action"] != "finalize":
+                raise MatchUnavailable
+            match_data = finalizing["match"]
+        elif action != "finalize":
+            raise MatchUnavailable
+
+        time_taken = match_data["finalizingTimeSeconds"]
+        finalized_at = match_data["finalizingAt"]
+        try:
+            user_result = register_user_result(
+                user_id,
+                match_id,
+                match_data["caseId"],
+                "CLASSIC",
+                True,
+                time_taken,
+                None,
+                match_data["difficulty"],
+            )
+        except UserResultConflict as exc:
+            raise MatchConflict from exc
+
+        result = {
+            "attemptId": attempt_id,
+            "valid": True,
+            "status": "FINISHED",
+            "xpDelta": user_result["xpDelta"],
+            "firstWinRewarded": user_result["firstWinRewarded"],
+        }
+        completion = self.repository.complete_classic_attempt(
+            match_id,
+            attempt_id,
+            fingerprint,
+            match_data,
+            result,
+            user_id,
+            user_result["xpDelta"],
+            {
+                "matchId": match_id,
+                "mode": "CLASSIC",
+                "caseId": match_data["caseId"],
+                "result": "WON",
+                "timestamp": finalized_at,
+            },
+        )
+        if completion["action"] == "replay":
+            return ClassicAttemptResultDTO(**completion["result"])
+        if completion["action"] == "not_found":
+            raise MatchNotFound
+        if completion["action"] == "conflict":
+            raise MatchConflict
+        if completion["action"] != "stored":
+            raise MatchUnavailable
+        return ClassicAttemptResultDTO(**result)
 
     def create_timed_match(
         self,
@@ -106,6 +286,7 @@ class MatchService:
 
         register_user_result(
             user_id,
+            match_id,
             match_data["caseId"],
             "TIMED",
             result.won,
@@ -257,6 +438,7 @@ class MatchService:
                 xp_delta = 100 if won else 0
                 register_user_result(
                     player,
+                    match_id,
                     match_data["caseId"],
                     "VERSUS",
                     won,
