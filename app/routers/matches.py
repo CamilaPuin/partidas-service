@@ -3,9 +3,16 @@ from typing import List
 import re
 
 from app.core.redis_client import redis_client
-from app.core.service_clients import CasesServiceError, ServiceIntegrationError
+from app.core.service_clients import (
+    CaseNotFound,
+    CasesServiceError,
+    ServiceIntegrationError,
+)
 from app.repositories.matches import MatchRepository
 from app.schemas.matches import (
+    ClassicAttemptRequest,
+    ClassicAttemptResultDTO,
+    ClassicMatchRequest,
     MatchDTO,
     MatchResultDTO,
     ProgressRequest,
@@ -18,6 +25,7 @@ from app.schemas.matches import (
 )
 from app.services.matches import (
     IncorrectSolution,
+    MatchConflict,
     MatchNotFound,
     MatchService,
     MatchUnavailable,
@@ -44,6 +52,72 @@ def get_current_user_id(
             detail="El encabezado X-User-Id es inválido",
         )
     return x_user_id
+
+
+@router.post(
+    "/matches/classic",
+    response_model=MatchDTO,
+    status_code=200,
+    summary="Crear partida clásica",
+    responses={
+        200: {"description": "Partida clásica creada"},
+        404: {"description": "Caso no encontrado"},
+        503: {"description": "Casos no disponible o dificultad inválida"},
+    },
+)
+def create_classic_match(
+    request: ClassicMatchRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        return match_service.create_classic_match(request, user_id)
+    except CaseNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ServiceIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post(
+    "/matches/classic/{match_id}/attempts",
+    response_model=ClassicAttemptResultDTO,
+    response_model_exclude_none=True,
+    status_code=200,
+    summary="Enviar intento de partida clásica",
+    responses={
+        200: {"description": "Resultado del intento; uno incorrecto deja la partida en curso"},
+        403: {"description": "El usuario no pertenece a la partida"},
+        404: {"description": "Partida o caso no encontrado"},
+        409: {"description": "Intento contradictorio o partida no disponible"},
+        502: {"description": "Error al registrar el resultado en usuarios"},
+        503: {"description": "Casos no disponible o respuesta de validación inválida"},
+    },
+)
+def attempt_classic_match(
+    match_id: str,
+    request: ClassicAttemptRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        return match_service.attempt_classic_match(match_id, user_id, request)
+    except MatchNotFound as exc:
+        raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
+    except OwnMatch as exc:
+        raise HTTPException(status_code=403, detail="No perteneces a la partida") from exc
+    except MatchConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="El intento contradice un intento previo o la partida está finalizando",
+        ) from exc
+    except MatchUnavailable as exc:
+        raise HTTPException(status_code=409, detail="La partida ya no está disponible") from exc
+    except CaseNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ServiceIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post(
