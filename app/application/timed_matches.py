@@ -82,15 +82,16 @@ class FinishTimedMatch:
         ):
             raise MatchUnavailable
 
-        self._users.register(
+        applied_result = self._users.register(
             user_id,
+            match_id,
             match_data["caseId"],
             "TIMED",
             outcome.won,
             outcome.time_seconds,
             outcome.xp_delta,
         )
-        self._store.increment_score(user_id, outcome.xp_delta)
+        self._store.increment_score(user_id, applied_result.xp_delta)
         self._store.save_user_history(
             user_id,
             {
@@ -101,4 +102,6 @@ class FinishTimedMatch:
                 "timestamp": now,
             },
         )
-        return outcome.to_dict()
+        response = outcome.to_dict()
+        response["xpDelta"] = applied_result.xp_delta
+        return response

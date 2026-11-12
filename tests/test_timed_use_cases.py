@@ -4,6 +4,7 @@ from threading import Barrier, Lock
 import pytest
 
 from app.application.errors import MatchNotFound, MatchUnavailable, OwnMatch
+from app.application.ports import AppliedUserResult
 from app.application.timed_matches import CreateTimedMatch, FinishTimedMatch
 
 
@@ -77,9 +78,10 @@ class FakeCases:
 
 
 class FakeUsers:
-    def __init__(self, events=None, error=None):
+    def __init__(self, events=None, error=None, applied_xp_delta=None):
         self.events = events if events is not None else []
         self.error = error
+        self.applied_xp_delta = applied_xp_delta
         self.calls = []
 
     def register(self, *args):
@@ -87,6 +89,10 @@ class FakeUsers:
         self.calls.append(args)
         if self.error:
             raise self.error
+        return AppliedUserResult(
+            xp_delta=args[-1] if self.applied_xp_delta is None else self.applied_xp_delta,
+            first_win_rewarded=False,
+        )
 
 
 def match_data(status="IN_PROGRESS"):
@@ -133,7 +139,7 @@ def test_finish_winning_match_preserves_operation_order_and_side_effects():
 
     assert response == {"won": True, "timeSeconds": 50, "bonus": 20, "xpDelta": 70}
     assert cases.calls == [("case-1", positions)]
-    assert users.calls == [("user-1", "case-1", "TIMED", True, 50, 70)]
+    assert users.calls == [("user-1", "m-1", "case-1", "TIMED", True, 50, 70)]
     assert [event[0] for event in events] == [
         "get",
         "validate",
@@ -181,7 +187,9 @@ def test_incorrect_or_expired_solution_registers_loss_without_bonus():
             "bonus": 0,
             "xpDelta": -10,
         }
-        assert users.calls == [("user-1", "case-1", "TIMED", False, now - 100, -10)]
+        assert users.calls == [
+            ("user-1", "m-1", "case-1", "TIMED", False, now - 100, -10)
+        ]
 
 
 def test_deadline_expiry_still_validates_case_before_result_transition():
@@ -258,6 +266,17 @@ def test_users_failure_after_redis_close_preserves_known_partial_failure():
     assert store.match["status"] == "FINISHED"
     assert store.score_updates == []
     assert store.history == []
+
+
+def test_applied_users_xp_controls_result_and_ranking_when_it_differs():
+    store = FakeStore(match_data())
+    users = FakeUsers(applied_xp_delta=13)
+    use_case = FinishTimedMatch(store, FakeCases(), users, FixedClock(150))
+
+    response = use_case.execute("m-1", "user-1", [])
+
+    assert response == {"won": True, "timeSeconds": 50, "bonus": 20, "xpDelta": 13}
+    assert store.score_updates == [("user-1", 13)]
 
 
 def test_simultaneous_finish_requests_close_the_match_only_once():

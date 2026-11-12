@@ -7,6 +7,7 @@ from py_eureka_client.eureka_client import EurekaClient
 
 from app.core.redis_client import redis_client
 from app.core.gateway_security import GatewaySecretMiddleware, configured_gateway_secret
+from app.messaging.kafka_ping import KafkaPingRuntime
 from app.routers.matches import router as matches_router
 from app.observability.http_metrics import HttpRequestMetricsMiddleware
 from app.observability.metrics_router import metrics_credentials, router as metrics_router
@@ -51,12 +52,17 @@ async def lifespan(app: FastAPI):
         status_page_url=f"{public_base_url}/health",
         health_check_url=f"{public_base_url}/health",
     )
-    
+    kafka_runtime = KafkaPingRuntime()
+
     await eureka_client.start()
+    await kafka_runtime.start()
     try:
         yield
     finally:
-        await eureka_client.stop()
+        try:
+            await kafka_runtime.stop()
+        finally:
+            await eureka_client.stop()
 
 
 app = FastAPI(title="Partidas Service", lifespan=lifespan)

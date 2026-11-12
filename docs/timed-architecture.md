@@ -18,14 +18,23 @@ FastAPI router
 
 The application owns the port protocols. Domain and application modules do not
 depend on FastAPI, Pydantic, Redis, Eureka, HTTP clients, or repository modules.
-The existing VERSUS flow remains in `MatchService`.
+CLASSIC and VERSUS remain in `MatchService`; TIMED stays in its P9 use cases.
+
+TIMED result registration sends its actual `matchId` to `usuarios-service` and
+does not send a case difficulty. The use case uses the returned `xpDelta` for
+the public result and Redis ranking. The current Users implementation applies
+the supplied XP unchanged for non-CLASSIC modes, so its TIMED result matches
+the already-persisted calculated result. If a future Users implementation
+returns a different TIMED value, the existing `finalResult` stored before the
+HTTP call is not reconciled; that behavior remains a documented limitation.
 
 ## Existing partial failure after Redis completion
 
 Finishing a TIMED match first validates the solution, then atomically changes
 the Redis match from `IN_PROGRESS` to `FINISHED` using the existing `WATCH`
 transaction and TTL. Only after that succeeds does it register the result in
-`usuarios-service`, update the Redis ranking, and write user history.
+`usuarios-service`, update the Redis ranking using the XP it confirms, and
+write user history.
 
 If `usuarios-service` fails after Redis has marked the match `FINISHED`, the
 match remains closed while its user result, ranking update, and history entry

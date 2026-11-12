@@ -5,7 +5,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-from app.application.errors import CasesServiceError, ServiceIntegrationError
+from app.application.errors import (
+    CaseNotFound,
+    CasesServiceError,
+    ServiceIntegrationError,
+    UserResultConflict,
+)
 
 
 def _eureka_registry_url() -> str:
@@ -25,7 +30,13 @@ def _service_url(service_name: str) -> str:
     try:
         with urlopen(request, timeout=5) as response:
             registry = json.loads(response.read())
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (
+        HTTPError,
+        URLError,
+        TimeoutError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ) as exc:
         raise ServiceIntegrationError(
             f"No se pudo consultar Eureka para {service_name}"
         ) from exc
@@ -92,7 +103,17 @@ def post_service_json(
     try:
         with urlopen(request, timeout=_http_timeout_seconds()) as response:
             body = response.read()
-    except (HTTPError, URLError, TimeoutError) as exc:
+    except HTTPError as exc:
+        if service_name_upper == "CASOS-SERVICE" and exc.code == 404:
+            raise CaseNotFound("El caso solicitado no existe") from exc
+        if service_name_upper == "USUARIOS-SERVICE" and exc.code == 409:
+            raise UserResultConflict(
+                "USUARIOS-SERVICE rechazó un resultado contradictorio"
+            ) from exc
+        raise ServiceIntegrationError(
+            f"{service_name} rechazó o no pudo procesar la solicitud"
+        ) from exc
+    except (URLError, TimeoutError) as exc:
         raise ServiceIntegrationError(
             f"{service_name} rechazó o no pudo procesar la solicitud"
         ) from exc
@@ -101,7 +122,39 @@ def post_service_json(
         return None
     try:
         return json.loads(body)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ServiceIntegrationError(
+            f"{service_name} devolvió una respuesta JSON inválida"
+        ) from exc
+
+
+def get_service_json(service_name: str, path: str) -> Any:
+    service_url = _service_url(service_name)
+    headers = {"Accept": "application/json"}
+    if service_name.upper() == "CASOS-SERVICE":
+        gateway_secret = os.getenv("GATEWAY_SECRET")
+        if not gateway_secret:
+            raise CasesServiceError("GATEWAY_SECRET no está configurado")
+        headers["X-Gateway-Secret"] = gateway_secret
+
+    request = Request(f"{service_url}{path}", headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=_http_timeout_seconds()) as response:
+            body = response.read()
+    except HTTPError as exc:
+        if service_name.upper() == "CASOS-SERVICE" and exc.code == 404:
+            raise CaseNotFound("El caso solicitado no existe") from exc
+        raise ServiceIntegrationError(
+            f"{service_name} rechazó o no pudo procesar la solicitud"
+        ) from exc
+    except (URLError, TimeoutError) as exc:
+        raise ServiceIntegrationError(
+            f"No se pudo consultar {service_name}"
+        ) from exc
+
+    try:
+        return json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ServiceIntegrationError(
             f"{service_name} devolvió una respuesta JSON inválida"
         ) from exc
@@ -134,6 +187,8 @@ def validate_case(case_id: str, positions: list[Any]) -> bool:
             },
             expect_json=True,
         )
+    except CaseNotFound:
+        raise
     except ServiceIntegrationError as exc:
         raise CasesServiceError(f"CASOS-SERVICE no pudo validar la solución: {exc}") from exc
     if isinstance(response, dict):
@@ -145,22 +200,67 @@ def validate_case(case_id: str, positions: list[Any]) -> bool:
     )
 
 
+def get_case_difficulty(case_id: str) -> str:
+    try:
+        response = get_service_json(
+            "CASOS-SERVICE",
+            f"/cases/{quote(case_id, safe='')}",
+        )
+    except CaseNotFound:
+        raise
+    except ServiceIntegrationError as exc:
+        raise CasesServiceError(
+            f"CASOS-SERVICE no pudo recuperar el caso: {exc}"
+        ) from exc
+
+    if not isinstance(response, dict):
+        raise CasesServiceError("CASOS-SERVICE devolvió un caso inválido")
+    difficulty = response.get("difficulty")
+    if not isinstance(difficulty, str) or difficulty not in {"EASY", "MEDIUM", "HARD"}:
+        raise CasesServiceError(
+            "CASOS-SERVICE devolvió una dificultad no reconocida"
+        )
+    return difficulty
+
+
 def register_user_result(
     user_id: str,
+    match_id: str,
     case_id: str,
     mode: str,
     won: bool,
     time_seconds: int,
-    xp_delta: int,
-) -> None:
-    post_service_json(
+    xp_delta: int | None,
+    difficulty: str | None = None,
+) -> Dict[str, Any]:
+    response = post_service_json(
         "USUARIOS-SERVICE",
         f"/users/{quote(user_id, safe='')}/results",
         {
+            "matchId": match_id,
             "caseId": case_id,
             "mode": mode,
             "won": won,
             "timeSeconds": time_seconds,
+            "difficulty": difficulty,
             "xpDelta": xp_delta,
         },
+        expect_json=True,
     )
+    if (
+        not isinstance(response, dict)
+        or response.get("matchId") != match_id
+        or response.get("caseId") != case_id
+        or response.get("mode") != mode
+        or response.get("won") is not won
+        or type(response.get("xpDelta")) is not int
+        or not isinstance(response.get("firstWinRewarded"), bool)
+        or (mode == "CLASSIC" and response["xpDelta"] < 0)
+    ):
+        raise ServiceIntegrationError(
+            "USUARIOS-SERVICE devolvió un resultado incompatible"
+        )
+    return {
+        "xpDelta": response["xpDelta"],
+        "firstWinRewarded": response["firstWinRewarded"],
+    }

@@ -1,4 +1,11 @@
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Protocol
+
+
+@dataclass(frozen=True)
+class AppliedUserResult:
+    xp_delta: int
+    first_win_rewarded: bool
 
 
 class TimedMatchStore(Protocol):
@@ -26,12 +33,13 @@ class UserResultRecorder(Protocol):
     def register(
         self,
         user_id: str,
+        match_id: str,
         case_id: str,
         mode: str,
         won: bool,
         time_seconds: int,
         xp_delta: int,
-    ) -> None: ...
+    ) -> AppliedUserResult: ...
 
 
 class Clock(Protocol):

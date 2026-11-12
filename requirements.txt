@@ -1,5 +1,6 @@
-fastapi
+﻿fastapi
 uvicorn[standard]
 redis
 py-eureka-client
 prometheus-client
+aiokafka==0.15.0

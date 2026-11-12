@@ -3,6 +3,7 @@ import uuid
 from typing import Any, List
 
 from app.core.service_clients import register_user_result, validate_case
+from app.application.ports import AppliedUserResult
 
 
 class SystemClock:
@@ -24,10 +25,24 @@ class UsersHttpAdapter:
     def register(
         self,
         user_id: str,
+        match_id: str,
         case_id: str,
         mode: str,
         won: bool,
         time_seconds: int,
         xp_delta: int,
-    ) -> None:
-        register_user_result(user_id, case_id, mode, won, time_seconds, xp_delta)
+    ) -> AppliedUserResult:
+        applied = register_user_result(
+            user_id,
+            match_id,
+            case_id,
+            mode,
+            won,
+            time_seconds,
+            xp_delta,
+            None,
+        )
+        return AppliedUserResult(
+            xp_delta=applied["xpDelta"],
+            first_win_rewarded=applied["firstWinRewarded"],
+        )
