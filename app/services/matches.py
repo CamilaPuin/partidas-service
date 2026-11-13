@@ -3,10 +3,18 @@ import time
 import uuid
 from typing import List
 
-from app.core.service_clients import (
+from app.application.errors import (
+    CaseNotFound,
     CasesServiceError,
+    IncorrectSolution,
+    MatchConflict,
+    MatchNotFound,
+    MatchUnavailable,
+    OwnMatch,
     ServiceIntegrationError,
     UserResultConflict,
+)
+from app.core.service_clients import (
     get_case_difficulty,
     register_user_result,
     validate_case,
@@ -20,32 +28,10 @@ from app.schemas.matches import (
     MatchResultDTO,
     ProgressRequest,
     RankingEntryDTO,
-    ResultDTO,
     SolutionDTO,
-    TimedMatchRequest,
     VersusMatchRequest,
     VersusResultDTO,
 )
-
-
-class MatchNotFound(Exception):
-    pass
-
-
-class MatchUnavailable(Exception):
-    pass
-
-
-class OwnMatch(Exception):
-    pass
-
-
-class IncorrectSolution(Exception):
-    pass
-
-
-class MatchConflict(Exception):
-    pass
 
 
 class MatchService:
@@ -216,95 +202,6 @@ class MatchService:
         if completion["action"] != "stored":
             raise MatchUnavailable
         return ClassicAttemptResultDTO(**result)
-
-    def create_timed_match(
-        self,
-        request: TimedMatchRequest,
-        user_id: str,
-    ) -> MatchDTO:
-        match_id = str(uuid.uuid4())
-        now = int(time.time())
-        deadline = now + request.timeLimitSeconds
-        match_data = {
-            "matchId": match_id,
-            "caseId": request.caseId,
-            "startedAt": now,
-            "deadline": deadline,
-            "mode": "TIMED",
-            "status": "IN_PROGRESS",
-            "player1": user_id,
-        }
-        self.repository.save_match(match_id, match_data)
-        return MatchDTO(
-            matchId=match_id,
-            caseId=request.caseId,
-            startedAt=now,
-            deadline=deadline,
-        )
-
-    def finish_timed_match(
-        self,
-        match_id: str,
-        user_id: str,
-        solution: SolutionDTO,
-    ) -> ResultDTO:
-        match_data = self.repository.get_match(match_id)
-        if not match_data:
-            raise MatchNotFound
-        if match_data["player1"] != user_id:
-            raise OwnMatch
-        if match_data.get("status") != "IN_PROGRESS":
-            raise MatchUnavailable
-
-        now = int(time.time())
-        time_taken = now - match_data["startedAt"]
-        is_correct = validate_case(match_data["caseId"], solution.positions)
-        if now > match_data["deadline"] or not is_correct:
-            result = ResultDTO(
-                won=False,
-                timeSeconds=time_taken,
-                bonus=0,
-                xpDelta=-10,
-            )
-        else:
-            bonus = max(0, match_data["deadline"] - now) * 2
-            result = ResultDTO(
-                won=True,
-                timeSeconds=time_taken,
-                bonus=bonus,
-                xpDelta=50 + bonus,
-            )
-
-        match_data["status"] = "FINISHED"
-        match_data["finalResult"] = result.model_dump()
-        if not self.repository.complete_match(
-            match_id,
-            "IN_PROGRESS",
-            match_data,
-        ):
-            raise MatchUnavailable
-
-        register_user_result(
-            user_id,
-            match_id,
-            match_data["caseId"],
-            "TIMED",
-            result.won,
-            time_taken,
-            result.xpDelta,
-        )
-        self.repository.increment_score(user_id, result.xpDelta)
-        self.repository.save_user_history(
-            user_id,
-            {
-                "matchId": match_id,
-                "mode": "TIMED",
-                "caseId": match_data["caseId"],
-                "result": "WON" if result.won else "LOST",
-                "timestamp": now,
-            },
-        )
-        return result
 
     def create_versus_match(
         self,

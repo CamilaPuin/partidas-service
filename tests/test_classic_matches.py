@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.service_clients import ServiceIntegrationError
+from app.core.service_clients import ServiceIntegrationError, UserResultConflict
 from app.schemas.matches import (
     ClassicAttemptRequest,
     ClassicMatchRequest,
@@ -295,6 +295,24 @@ def test_retry_recovers_finalizing_classic_result_without_revalidation(monkeypat
     assert len(validations) == 1
     assert len(registrations) == 2
     assert registration_args[0][5] == registration_args[1][5] == 60
+
+
+def test_contradictory_users_result_becomes_match_conflict_and_keeps_finalizing(
+    monkeypatch,
+):
+    service, repository = build_match()
+    monkeypatch.setattr(match_module, "validate_case", lambda *_args: True)
+    monkeypatch.setattr(match_module.time, "time", lambda: 160)
+
+    def conflict(*_args):
+        raise UserResultConflict("matchId contradictorio")
+
+    monkeypatch.setattr(match_module, "register_user_result", conflict)
+
+    with pytest.raises(MatchConflict):
+        service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
+
+    assert repository.get_match(MATCH_ID)["status"] == "FINALIZING"
 
 
 def test_validation_error_releases_attempt_reservation(monkeypatch):
