@@ -5,21 +5,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-
-class ServiceIntegrationError(Exception):
-    pass
-
-
-class CasesServiceError(ServiceIntegrationError):
-    pass
-
-
-class CaseNotFound(CasesServiceError):
-    pass
-
-
-class UserResultConflict(ServiceIntegrationError):
-    pass
+from app.application.errors import (
+    CaseNotFound,
+    CasesServiceError,
+    ServiceIntegrationError,
+    UserResultConflict,
+)
 
 
 def _eureka_registry_url() -> str:

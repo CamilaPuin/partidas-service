@@ -4,17 +4,33 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 service_dir="$(cd "$script_dir/../.." && pwd)"
 compose_file="$script_dir/compose.yaml"
-project_name="deathdoku-m6-classic-$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
+
+
+project_name="deathdoku-m6-classic-$(openssl rand -hex 16)"
 users_commit="4b183596229ce5ef5d79c9c6b7e782d6d8022e80"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/m6-classic-integration.XXXXXX")"
 
 export M6_DB_PASSWORD="$(openssl rand -hex 24)"
 export M6_MONGO_PASSWORD="$(openssl rand -hex 24)"
 export M6_GATEWAY_SECRET="$(openssl rand -hex 32)"
-export M6_INTERNAL_TOKEN="$(openssl rand -hex 32)"
+export M6_METRICS_PASSWORD="$(openssl rand -hex 32)"
 export M6_CASES_IMAGE="${M6_CASES_IMAGE:-thedeathdoku-casos-service:latest}"
 export M6_EUREKA_IMAGE="${M6_EUREKA_IMAGE:-thedeathdoku-eureka-server:latest}"
-export M6_USERS_SOURCE_DIR="$tmp_dir/users-build"
+export M6_INTERNAL_TOKEN="$(openssl rand -hex 32)"
+users_build_dir="$tmp_dir/users-build"
+if command -v cygpath >/dev/null 2>&1; then
+  export M6_USERS_SOURCE_DIR="$(cygpath -m "$users_build_dir")"
+else
+  export M6_USERS_SOURCE_DIR="$users_build_dir"
+fi
+
+if command -v cygpath >/dev/null 2>&1; then
+  compose_file="$(cygpath -w "$compose_file")"
+
+  docker() {
+    MSYS_NO_PATHCONV=1 command docker "$@"
+  }
+fi
 
 cleanup() {
   if ! docker compose -p "$project_name" -f "$compose_file" down --remove-orphans >/dev/null; then
@@ -30,9 +46,16 @@ if ! command -v docker >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; the
   exit 1
 fi
 
-branch="$(git -C "$service_dir" branch --show-current)"
-if [ "$branch" != "feat/m6-classic" ]; then
-  echo "Se esperaba partidas-service en feat/m6-classic; rama actual: $branch" >&2
+git_service_dir="$service_dir"
+
+if command -v cygpath >/dev/null 2>&1; then
+  git_service_dir="$(cygpath -m "$service_dir")"
+fi
+
+branch="$(git -C "$git_service_dir" branch --show-current)"
+if [[ "$branch" != "feat/m6-classic" &&
+      "$branch" != "feat/integration-m6-p7-p9" ]]; then
+  echo "Rama no autorizada para integración aislada: $branch" >&2
   exit 1
 fi
 
@@ -42,23 +65,33 @@ if ! docker image inspect "$M6_CASES_IMAGE" "$M6_EUREKA_IMAGE" >/dev/null 2>&1; 
 fi
 
 trap cleanup EXIT
-mkdir -p "$tmp_dir/users-source" "$M6_USERS_SOURCE_DIR"
+mkdir -p "$tmp_dir/users-source" "$users_build_dir"
+download_file="$tmp_dir/users-source.tar.gz"
+curl_output_file="$download_file"
+
+if command -v cygpath >/dev/null 2>&1; then
+  curl_output_file="$(cygpath -m "$download_file")"
+fi
+
 curl --fail --location --silent --show-error \
   "https://github.com/DanielEspitiaAgu/users_service/archive/$users_commit.tar.gz" \
-  --output "$tmp_dir/users-source.tar.gz"
+  --output "$curl_output_file"
 tar -xzf "$tmp_dir/users-source.tar.gz" -C "$tmp_dir/users-source" --strip-components=1
 cp "$tmp_dir/users-source/Dockerfile" \
   "$tmp_dir/users-source/pom.xml" \
   "$tmp_dir/users-source/mvnw" \
   "$tmp_dir/users-source/mvnw.cmd" \
-  "$M6_USERS_SOURCE_DIR/"
-cp -R "$tmp_dir/users-source/.mvn" "$tmp_dir/users-source/src" "$M6_USERS_SOURCE_DIR/"
+  "$users_build_dir/"
+cp -R "$tmp_dir/users-source/.mvn" "$tmp_dir/users-source/src" "$users_build_dir/"
 
 if ! docker compose -p "$project_name" -f "$compose_file" up --detach --build --wait --wait-timeout 300; then
   echo "Falló el arranque; registros del broker Kafka aislado:" >&2
   if ! docker compose -p "$project_name" -f "$compose_file" logs --no-color kafka >&2; then
     echo "No se pudieron leer los registros de Kafka." >&2
   fi
+  echo "Registros de partidas-service:" >&2
+  docker compose -p "$project_name" -f "$compose_file" \
+    logs --no-color --tail=100 partidas-service >&2 || true
   exit 1
 fi
 
@@ -85,4 +118,4 @@ users_port="$(docker compose -p "$project_name" -f "$compose_file" port usuarios
 export M6_PARTIDAS_URL="http://127.0.0.1:$partidas_port"
 export M6_CASES_URL="http://127.0.0.1:$cases_port"
 export M6_USERS_URL="http://127.0.0.1:$users_port"
-python3 "$script_dir/verify-services.py"
+python "$script_dir/verify-services.py"

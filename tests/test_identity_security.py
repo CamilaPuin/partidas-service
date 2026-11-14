@@ -63,12 +63,31 @@ def test_gateway_secret_configuration_fails_closed(monkeypatch):
         configured_gateway_secret()
 
 
-def test_get_health_is_the_only_secret_free_request(monkeypatch):
+def test_health_keeps_only_get_secret_free(monkeypatch):
     response, called = dispatch_gateway_middleware(monkeypatch, "GET", "/health")
     assert response.status_code == 204
     assert called
 
     response, called = dispatch_gateway_middleware(monkeypatch, "HEAD", "/health")
+    assert response.status_code == 403
+    assert not called
+
+
+def test_only_get_metrics_is_exempt_for_its_own_basic_auth(monkeypatch):
+    response, called = dispatch_gateway_middleware(monkeypatch, "GET", "/metrics")
+    assert response.status_code == 204
+    assert called
+
+    response, called = dispatch_gateway_middleware(monkeypatch, "HEAD", "/metrics")
+    assert response.status_code == 403
+    assert not called
+
+    response, called = dispatch_gateway_middleware(
+        monkeypatch,
+        "GET",
+        "/matches/ranking",
+        {"Authorization": "Basic dGVzdDpwYXNzd29yZA=="},
+    )
     assert response.status_code == 403
     assert not called
 

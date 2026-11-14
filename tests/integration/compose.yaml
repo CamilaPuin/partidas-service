@@ -163,6 +163,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_GROUP_ID: m6-partidas-integration
       KAFKA_POC_PING_ON_START: "false"
+      METRICS_SCRAPE_PASSWORD: ${M6_METRICS_PASSWORD:?Provide a generated test-only metrics password}
     depends_on:
       redis:
         condition: service_healthy
