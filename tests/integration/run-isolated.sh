@@ -7,7 +7,7 @@ compose_file="$script_dir/compose.yaml"
 
 
 project_name="deathdoku-m6-classic-$(openssl rand -hex 16)"
-users_commit="4b183596229ce5ef5d79c9c6b7e782d6d8022e80"
+users_commit="e34ce425044a8e7da1e09c74ab18cbc5e1fd6939"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/m6-classic-integration.XXXXXX")"
 
 export M6_DB_PASSWORD="$(openssl rand -hex 24)"
@@ -18,6 +18,14 @@ export M6_CASES_IMAGE="${M6_CASES_IMAGE:-thedeathdoku-casos-service:latest}"
 export M6_EUREKA_IMAGE="${M6_EUREKA_IMAGE:-thedeathdoku-eureka-server:latest}"
 export M6_INTERNAL_TOKEN="$(openssl rand -hex 32)"
 users_build_dir="$tmp_dir/users-build"
+if command -v python3 >/dev/null 2>&1; then
+  python_command="python3"
+elif command -v python >/dev/null 2>&1; then
+  python_command="python"
+else
+  echo "Se requiere Python 3 (python3 o python) para verificar la integración." >&2
+  exit 1
+fi
 if command -v cygpath >/dev/null 2>&1; then
   export M6_USERS_SOURCE_DIR="$(cygpath -m "$users_build_dir")"
 else
@@ -118,4 +126,4 @@ users_port="$(docker compose -p "$project_name" -f "$compose_file" port usuarios
 export M6_PARTIDAS_URL="http://127.0.0.1:$partidas_port"
 export M6_CASES_URL="http://127.0.0.1:$cases_port"
 export M6_USERS_URL="http://127.0.0.1:$users_port"
-python "$script_dir/verify-services.py"
+"$python_command" "$script_dir/verify-services.py"
