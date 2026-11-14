@@ -147,6 +147,11 @@ def test_classic_match_uses_server_case_difficulty_and_stores_snapshot(monkeypat
     repository = InMemoryMatchRepository()
     service = MatchService(repository)
     monkeypatch.setattr(match_module, "get_case_difficulty", lambda _case_id: "HARD")
+    monkeypatch.setattr(
+        match_module,
+        "get_user_progression",
+        lambda _user_id: {"level": 10},
+    )
     monkeypatch.setattr(match_module.time, "time", lambda: 1234)
 
     created = service.create_classic_match(
