@@ -1,4 +1,4 @@
-# Integración aislada de M6.1
+# Integración aislada de M6.3
 
 Esta configuración prueba `partidas-service/feat/m6-classic` contra el contrato
 publicado de `users_service/feat/m6-classic-results` y el servicio de casos,
@@ -13,7 +13,7 @@ sin utilizar el API Gateway ni recursos del Compose principal.
 - Solo los puertos aleatorios de partidas, casos y usuarios se enlazan a
   `127.0.0.1`.
 - Partidas se construye desde el checkout actual `feat/m6-classic`; usuarios se
-  descarga desde el commit publicado `4b183596229ce5ef5d79c9c6b7e782d6d8022e80`
+  descarga desde el commit publicado `e34ce425044a8e7da1e09c74ab18cbc5e1fd6939`
   y se construye desde un contexto temporal que solo contiene el Dockerfile,
   archivos Maven, `.mvn/` y `src/`.
 - Casos y Eureka usan imágenes estables ya existentes. El runner falla si no
@@ -30,9 +30,11 @@ el esquema ORM, sin cambiar la configuración de despliegue publicada.
 
 ## Requisitos
 
-- macOS con Docker Engine y Docker Compose.
+- macOS o Windows con Docker Desktop y Docker Compose; en Windows, ejecutar
+  desde Git Bash o WSL.
 - Java 21 y Maven para probar migraciones.
-- Python 3 para el comprobador HTTP, sin paquetes adicionales.
+- Python 3 (`python3` o `python`) para el comprobador HTTP, sin paquetes
+  adicionales.
 - Las imágenes existentes `thedeathdoku-casos-service:latest` y
   `thedeathdoku-eureka-server:latest`.
 - Acceso de red para descargar la rama de usuarios fijada y las imágenes que

@@ -2,10 +2,22 @@
 set -euo pipefail
 
 branch_ref="feat/m6-classic-results"
-branch_commit="4b183596229ce5ef5d79c9c6b7e782d6d8022e80"
+branch_commit="e34ce425044a8e7da1e09c74ab18cbc5e1fd6939"
 source_url="https://github.com/DanielEspitiaAgu/users_service/archive/$branch_commit.tar.gz"
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/users-m6-migration.XXXXXX")"
-container_name="users-m6-migration-$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
+if command -v uuidgen >/dev/null 2>&1; then
+  new_uuid() {
+    uuidgen
+  }
+elif command -v openssl >/dev/null 2>&1; then
+  new_uuid() {
+    openssl rand -hex 16
+  }
+else
+  echo "Se requiere uuidgen u openssl para generar identificadores temporales." >&2
+  exit 1
+fi
+container_name="users-m6-migration-$(new_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]')"
 
 cleanup() {
   if docker container inspect "$container_name" >/dev/null 2>&1; then
@@ -58,7 +70,7 @@ if [ "$postgres_ready" -ne 1 ]; then
   exit 1
 fi
 
-marker="$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
+marker="$(new_uuid | tr -d '-' | tr '[:upper:]' '[:lower:]')"
 gateway_secret="$(openssl rand -hex 32)"
 internal_token="$(openssl rand -hex 32)"
 docker exec "$container_name" psql -U postgres -d migration_test \
