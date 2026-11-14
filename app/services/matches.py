@@ -8,6 +8,7 @@ from app.core.service_clients import (
     ServiceIntegrationError,
     UserResultConflict,
     get_case_difficulty,
+    get_user_progression,
     register_user_result,
     validate_case,
 )
@@ -48,6 +49,10 @@ class MatchConflict(Exception):
     pass
 
 
+class MatchLocked(Exception):
+    pass
+
+
 class MatchService:
     def __init__(self, repository: MatchRepository):
         self.repository = repository
@@ -58,6 +63,10 @@ class MatchService:
         user_id: str,
     ) -> MatchDTO:
         difficulty = get_case_difficulty(request.caseId)
+        progression = get_user_progression(user_id)
+        required_level = {"EASY": 1, "MEDIUM": 5, "HARD": 10}[difficulty]
+        if progression["level"] < required_level:
+            raise MatchLocked
         match_id = str(uuid.uuid4())
         now = int(time.time())
         match_data = {
