@@ -136,6 +136,11 @@ def get_service_json(service_name: str, path: str) -> Any:
         if not gateway_secret:
             raise CasesServiceError("GATEWAY_SECRET no está configurado")
         headers["X-Gateway-Secret"] = gateway_secret
+    if service_name.upper() == "USUARIOS-SERVICE":
+        internal_token = os.getenv("INTERNAL_API_TOKEN")
+        if not internal_token:
+            raise ServiceIntegrationError("INTERNAL_API_TOKEN no está configurado")
+        headers["X-Internal-Token"] = internal_token
 
     request = Request(f"{service_url}{path}", headers=headers, method="GET")
     try:
@@ -221,6 +226,28 @@ def get_case_difficulty(case_id: str) -> str:
             "CASOS-SERVICE devolvió una dificultad no reconocida"
         )
     return difficulty
+
+
+def get_user_progression(user_id: str) -> Dict[str, Any]:
+    try:
+        response = get_service_json(
+            "USUARIOS-SERVICE",
+            f"/users/{quote(user_id, safe='')}/progression",
+        )
+    except ServiceIntegrationError as exc:
+        raise ServiceIntegrationError(
+            f"USUARIOS-SERVICE no pudo recuperar la progresión: {exc}"
+        ) from exc
+    if (
+        not isinstance(response, dict)
+        or type(response.get("level")) is not int
+        or type(response.get("experience")) is not int
+        or type(response.get("nextLevelExperience")) is not int
+    ):
+        raise ServiceIntegrationError(
+            "USUARIOS-SERVICE devolvió una progresión inválida"
+        )
+    return response
 
 
 def register_user_result(

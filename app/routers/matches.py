@@ -33,6 +33,7 @@ from app.schemas.matches import (
 from app.services.matches import (
     IncorrectSolution,
     MatchConflict,
+    MatchLocked,
     MatchNotFound,
     MatchService,
     MatchUnavailable,
@@ -80,6 +81,7 @@ def get_current_user_id(
     summary="Crear partida clásica",
     responses={
         200: {"description": "Partida clásica creada"},
+        403: {"description": "El nivel del usuario no desbloquea la dificultad"},
         404: {"description": "Caso no encontrado"},
         503: {"description": "Casos no disponible o dificultad inválida"},
     },
@@ -94,6 +96,11 @@ def create_classic_match(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CasesServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except MatchLocked as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="El nivel actual no desbloquea esta dificultad",
+        ) from exc
     except ServiceIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

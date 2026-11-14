@@ -18,6 +18,10 @@ class MatchConflict(Exception):
     pass
 
 
+class MatchLocked(Exception):
+    pass
+
+
 class ServiceIntegrationError(Exception):
     pass
 
