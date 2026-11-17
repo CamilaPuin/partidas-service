@@ -8,7 +8,7 @@ class AppliedUserResult:
     first_win_rewarded: bool
 
 
-class TimedMatchStore(Protocol):
+class MatchStore(Protocol):
     def get_match(self, match_id: str) -> Optional[Dict[str, Any]]: ...
 
     def save_match(self, match_id: str, match_data: Dict[str, Any]) -> None: ...
@@ -24,9 +24,68 @@ class TimedMatchStore(Protocol):
 
     def save_user_history(self, user_id: str, history_entry: Dict[str, Any]) -> None: ...
 
+    def list_user_history(self, user_id: str) -> List[Dict[str, Any]]: ...
+
+    def list_ranking(self, limit: int) -> List[Any]: ...
+
+    def add_open_match(self, match_id: str) -> None: ...
+
+    def remove_open_match(self, match_id: str) -> None: ...
+
+    def list_open_match_ids(self) -> Any: ...
+
+    def save_progress(self, match_id: str, user_id: str, progress: float) -> None: ...
+
+    def get_progress(self, match_id: str, user_id: str) -> float: ...
+
+    def reserve_classic_attempt(
+        self, match_id: str, attempt_id: str, fingerprint: str
+    ) -> Dict[str, Any]: ...
+
+    def release_classic_validation(
+        self, match_id: str, attempt_id: str, fingerprint: str
+    ) -> bool: ...
+
+    def mark_classic_finalizing(
+        self,
+        match_id: str,
+        attempt_id: str,
+        fingerprint: str,
+        time_seconds: int,
+        finalized_at: int,
+    ) -> Dict[str, Any]: ...
+
+    def finish_classic_incorrect_attempt(
+        self,
+        match_id: str,
+        attempt_id: str,
+        fingerprint: str,
+        result: Dict[str, Any],
+    ) -> Dict[str, Any]: ...
+
+    def complete_classic_attempt(
+        self,
+        match_id: str,
+        attempt_id: str,
+        fingerprint: str,
+        match_data: Dict[str, Any],
+        result: Dict[str, Any],
+        user_id: str,
+        score_delta: int,
+        history_entry: Dict[str, Any],
+    ) -> Dict[str, Any]: ...
+
 
 class CaseSolutionValidator(Protocol):
     def validate(self, case_id: str, positions: List[Any]) -> bool: ...
+
+
+class CaseDifficultyProvider(Protocol):
+    def get_difficulty(self, case_id: str) -> str: ...
+
+
+class UserProgressionProvider(Protocol):
+    def get_progression(self, user_id: str) -> Dict[str, Any]: ...
 
 
 class UserResultRecorder(Protocol):
@@ -40,6 +99,18 @@ class UserResultRecorder(Protocol):
         time_seconds: int,
         xp_delta: int,
     ) -> AppliedUserResult: ...
+
+
+class CasesGateway(CaseSolutionValidator, CaseDifficultyProvider, Protocol):
+    pass
+
+
+class UsersGateway(UserResultRecorder, UserProgressionProvider, Protocol):
+    pass
+
+
+# Kept as an import alias for existing timed-match integrations.
+TimedMatchStore = MatchStore
 
 
 class Clock(Protocol):

@@ -2,13 +2,20 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from typing import List
 import re
 
-from app.application.timed_matches import CreateTimedMatch, FinishTimedMatch
-from app.core.redis_client import redis_client
-from app.core.service_clients import (
+from app.application.errors import (
     CaseNotFound,
     CasesServiceError,
+    IncorrectSolution,
+    MatchConflict,
+    MatchLocked,
+    MatchNotFound,
+    MatchUnavailable,
+    OwnMatch,
     ServiceIntegrationError,
 )
+from app.application.matches import MatchService
+from app.application.timed_matches import CreateTimedMatch, FinishTimedMatch
+from app.core.redis_client import redis_client
 from app.infrastructure.adapters.timed_match import (
     CasesHttpAdapter,
     SystemClock,
@@ -30,15 +37,6 @@ from app.schemas.matches import (
     VersusMatchRequest,
     VersusResultDTO,
 )
-from app.services.matches import (
-    IncorrectSolution,
-    MatchConflict,
-    MatchLocked,
-    MatchNotFound,
-    MatchService,
-    MatchUnavailable,
-    OwnMatch,
-)
 
 router = APIRouter(
     responses={
@@ -48,17 +46,27 @@ router = APIRouter(
     }
 )
 match_repository = MatchRepository(redis_client)
-match_service = MatchService(match_repository)
+cases_adapter = CasesHttpAdapter()
+users_adapter = UsersHttpAdapter()
+clock_adapter = SystemClock()
+ids_adapter = UuidMatchIdGenerator()
+match_service = MatchService(
+    store=match_repository,
+    cases=cases_adapter,
+    users=users_adapter,
+    clock=clock_adapter,
+    ids=ids_adapter,
+)
 create_timed_match_use_case = CreateTimedMatch(
     store=match_repository,
-    clock=SystemClock(),
-    ids=UuidMatchIdGenerator(),
+    clock=clock_adapter,
+    ids=ids_adapter,
 )
 finish_timed_match_use_case = FinishTimedMatch(
     store=match_repository,
-    cases=CasesHttpAdapter(),
-    users=UsersHttpAdapter(),
-    clock=SystemClock(),
+    cases=cases_adapter,
+    users=users_adapter,
+    clock=clock_adapter,
 )
 EXTERNAL_ID_PATTERN = re.compile(r"[A-Za-z0-9-]{1,64}\Z")
 
@@ -91,7 +99,7 @@ def create_classic_match(
     user_id: str = Depends(get_current_user_id),
 ):
     try:
-        return match_service.create_classic_match(request, user_id)
+        return match_service.create_classic_match(request.caseId, user_id)
     except CaseNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CasesServiceError as exc:
@@ -126,7 +134,12 @@ def attempt_classic_match(
     user_id: str = Depends(get_current_user_id),
 ):
     try:
-        return match_service.attempt_classic_match(match_id, user_id, request)
+        return match_service.attempt_classic_match(
+            match_id,
+            user_id,
+            str(request.attemptId),
+            request.positions,
+        )
     except MatchNotFound as exc:
         raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
     except OwnMatch as exc:
@@ -221,7 +234,7 @@ def create_versus_match(
     request: VersusMatchRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    return match_service.create_versus_match(request, user_id)
+    return match_service.create_versus_match(request.caseId, user_id)
 
 
 @router.get(
@@ -281,7 +294,7 @@ def report_progress(
     request: ProgressRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    return match_service.report_progress(match_id, user_id, request)
+    return match_service.report_progress(match_id, user_id, request.progress)
 
 
 @router.get(
@@ -334,7 +347,11 @@ def submit_versus_solution(
     user_id: str = Depends(get_current_user_id),
 ):
     try:
-        return match_service.submit_versus_solution(match_id, user_id, solution)
+        return match_service.submit_versus_solution(
+            match_id,
+            user_id,
+            solution.positions,
+        )
     except MatchNotFound as exc:
         raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
     except IncorrectSolution as exc:

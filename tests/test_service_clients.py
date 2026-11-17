@@ -12,7 +12,7 @@ class FakeResponse:
         return False
 
     def read(self):
-        return b'{"valid":true,"killerFound":true,"correctCount":4,"total":4}'
+        return b'{"valid":true,"killerFound":"S1","correctCount":4,"total":4}'
 
 
 class FakeResultResponse:

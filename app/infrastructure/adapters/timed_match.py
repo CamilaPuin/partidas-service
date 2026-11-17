@@ -2,7 +2,12 @@ import time
 import uuid
 from typing import Any, List
 
-from app.core.service_clients import register_user_result, validate_case
+from app.core.service_clients import (
+    get_case_difficulty,
+    get_user_progression,
+    register_user_result,
+    validate_case,
+)
 from app.application.ports import AppliedUserResult
 
 
@@ -17,11 +22,17 @@ class UuidMatchIdGenerator:
 
 
 class CasesHttpAdapter:
+    def get_difficulty(self, case_id: str) -> str:
+        return get_case_difficulty(case_id)
+
     def validate(self, case_id: str, positions: List[Any]) -> bool:
         return validate_case(case_id, positions)
 
 
 class UsersHttpAdapter:
+    def get_progression(self, user_id: str) -> dict:
+        return get_user_progression(user_id)
+
     def register(
         self,
         user_id: str,

@@ -164,6 +164,20 @@ def test_finish_winning_match_preserves_operation_order_and_side_effects():
     ]
 
 
+def test_duplicate_timed_finish_is_rejected_without_revalidating_or_reapplying_result():
+    store = FakeStore(match_data())
+    cases = FakeCases(events=store.events)
+    users = FakeUsers(events=store.events)
+    use_case = FinishTimedMatch(store, cases, users, FixedClock(150))
+
+    use_case.execute("m-1", "user-1", [])
+    with pytest.raises(MatchUnavailable):
+        use_case.execute("m-1", "user-1", [])
+
+    assert len(cases.calls) == 1
+    assert len(users.calls) == 1
+
+
 def test_finish_allows_correct_solution_when_now_equals_deadline():
     store = FakeStore(match_data())
     use_case = FinishTimedMatch(store, FakeCases(), FakeUsers(), FixedClock(160))

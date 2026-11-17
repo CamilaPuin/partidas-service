@@ -49,6 +49,13 @@ class PositionDTO(BaseModel):
 class SolutionDTO(BaseModel):
     positions: Annotated[list[PositionDTO], Field(min_length=1)]
 
+    @model_validator(mode="after")
+    def validate_unique_characters(self):
+        character_ids = [position.characterId for position in self.positions]
+        if len(set(character_ids)) != len(character_ids):
+            raise ValueError("La petición repite identificadores de personaje")
+        return self
+
 
 class ClassicAttemptRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")

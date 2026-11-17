@@ -1,13 +1,13 @@
 import pytest
 
-from app.core.service_clients import ServiceIntegrationError, UserResultConflict
-from app.schemas.matches import (
-    ClassicAttemptRequest,
-    ClassicMatchRequest,
-    PositionDTO,
+from app.application.errors import (
+    MatchConflict,
+    OwnMatch,
+    ServiceIntegrationError,
+    UserResultConflict,
 )
-from app.services import matches as match_module
-from app.services.matches import MatchConflict, MatchService, OwnMatch
+from app.application.matches import MatchService
+from app.application.ports import AppliedUserResult
 
 
 USER_ID = "603fba8d-bb2c-4994-bc27-e9c40e30fec8"
@@ -17,6 +17,62 @@ POSITIONS = [
     {"characterId": "V1", "x": 0, "y": 0},
     {"characterId": "S1", "x": 1, "y": 0},
 ]
+
+
+class FakeCases:
+    def __init__(self):
+        self.difficulty = "MEDIUM"
+        self.valid = False
+        self.error = None
+        self.validations = []
+
+    def get_difficulty(self, case_id):
+        if self.error:
+            raise self.error
+        self.difficulty_calls = getattr(self, "difficulty_calls", []) + [case_id]
+        return self.difficulty
+
+    def validate(self, case_id, positions):
+        self.validations.append((case_id, positions))
+        if self.error:
+            raise self.error
+        return self.valid
+
+
+class FakeUsers:
+    def __init__(self):
+        self.level = 10
+        self.error = None
+        self.register_error = None
+        self.result = {"xpDelta": 100, "firstWinRewarded": True}
+        self.registered = []
+
+    def get_progression(self, user_id):
+        if self.error:
+            raise self.error
+        return {"level": self.level}
+
+    def register(self, *args):
+        self.registered.append(args)
+        if self.register_error:
+            raise self.register_error
+        return AppliedUserResult(
+            xp_delta=self.result["xpDelta"],
+            first_win_rewarded=self.result["firstWinRewarded"],
+        )
+
+
+class FixedClock:
+    def __init__(self, *values):
+        self.values = iter(values or (1234,))
+
+    def now_seconds(self):
+        return next(self.values)
+
+
+class FixedIds:
+    def new_id(self):
+        return MATCH_ID
 
 
 class InMemoryMatchRepository:
@@ -133,35 +189,36 @@ def build_match(repository=None):
             "player1": USER_ID,
         },
     )
-    return MatchService(repository), repository
-
-
-def build_attempt(positions=POSITIONS):
-    return ClassicAttemptRequest(
-        attemptId=ATTEMPT_ID,
-        positions=[PositionDTO(**position) for position in positions],
+    service = MatchService(
+        store=repository,
+        cases=FakeCases(),
+        users=FakeUsers(),
+        clock=FixedClock(160, 160, 160),
+        ids=FixedIds(),
     )
+    return service, repository
 
 
-def test_classic_match_uses_server_case_difficulty_and_stores_snapshot(monkeypatch):
+def test_classic_match_uses_server_case_difficulty_and_stores_snapshot():
     repository = InMemoryMatchRepository()
-    service = MatchService(repository)
-    monkeypatch.setattr(match_module, "get_case_difficulty", lambda _case_id: "HARD")
-    monkeypatch.setattr(
-        match_module,
-        "get_user_progression",
-        lambda _user_id: {"level": 10},
+    cases = FakeCases()
+    cases.difficulty = "HARD"
+    service = MatchService(
+        store=repository,
+        cases=cases,
+        users=FakeUsers(),
+        clock=FixedClock(1234),
+        ids=FixedIds(),
     )
-    monkeypatch.setattr(match_module.time, "time", lambda: 1234)
 
     created = service.create_classic_match(
-        ClassicMatchRequest(caseId="case-1"),
+        "case-1",
         USER_ID,
     )
 
-    stored = repository.get_match(created.matchId)
-    assert created.caseId == "case-1"
-    assert created.status == "IN_PROGRESS"
+    stored = repository.get_match(created["matchId"])
+    assert created["caseId"] == "case-1"
+    assert created["status"] == "IN_PROGRESS"
     assert stored["difficulty"] == "HARD"
     assert stored["startedAt"] == 1234
     assert stored["mode"] == "CLASSIC"
@@ -169,11 +226,15 @@ def test_classic_match_uses_server_case_difficulty_and_stores_snapshot(monkeypat
 
 
 def test_classic_request_does_not_accept_client_difficulty():
+    from app.schemas.matches import ClassicMatchRequest
+
     with pytest.raises(ValueError):
         ClassicMatchRequest(caseId="case-1", difficulty="EASY")
 
 
 def test_classic_attempt_requires_uuid_and_unique_character_ids():
+    from app.schemas.matches import ClassicAttemptRequest, PositionDTO, SolutionDTO
+
     with pytest.raises(ValueError):
         ClassicAttemptRequest(
             attemptId="not-a-uuid",
@@ -187,70 +248,54 @@ def test_classic_attempt_requires_uuid_and_unique_character_ids():
                 PositionDTO(characterId="V1", x=1, y=0),
             ],
         )
+    with pytest.raises(ValueError):
+        SolutionDTO(
+            positions=[
+                PositionDTO(**POSITIONS[0]),
+                PositionDTO(characterId="V1", x=1, y=0),
+            ]
+        )
 
 
-def test_incorrect_classic_attempt_remains_open_and_replays_idempotently(monkeypatch):
+def test_incorrect_classic_attempt_remains_open_and_replays_idempotently():
     service, repository = build_match()
-    validations = []
-    monkeypatch.setattr(
-        match_module,
-        "validate_case",
-        lambda _case_id, _positions: validations.append(True) or False,
-    )
-    monkeypatch.setattr(
-        match_module,
-        "register_user_result",
-        lambda *_args, **_kwargs: pytest.fail("No debe registrar intentos incorrectos"),
-    )
+    service.cases.valid = False
 
-    first = service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
+    first = service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
     second = service.attempt_classic_match(
-        MATCH_ID,
-        USER_ID,
-        build_attempt(list(reversed(POSITIONS))),
+        MATCH_ID, USER_ID, ATTEMPT_ID, list(reversed(POSITIONS))
     )
 
-    assert first.valid is False
-    assert first.status == "IN_PROGRESS"
+    assert first["valid"] is False
+    assert first["status"] == "IN_PROGRESS"
     assert second == first
-    assert len(validations) == 1
+    assert len(service.cases.validations) == 1
+    assert not service.users.registered
     assert repository.get_match(MATCH_ID)["status"] == "IN_PROGRESS"
 
 
-def test_reusing_attempt_id_with_different_positions_conflicts(monkeypatch):
+def test_reusing_attempt_id_with_different_positions_conflicts():
     service, _repository = build_match()
-    monkeypatch.setattr(match_module, "validate_case", lambda *_args: False)
 
-    service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
+    service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
     changed = [{"characterId": "V1", "x": 2, "y": 0}]
 
     with pytest.raises(MatchConflict):
-        service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt(changed))
+        service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, changed)
 
 
-def test_classic_success_uses_applied_xp_from_users_service(monkeypatch):
+def test_classic_success_uses_applied_xp_from_users_service():
     service, repository = build_match()
-    monkeypatch.setattr(match_module, "validate_case", lambda *_args: True)
-    monkeypatch.setattr(match_module.time, "time", lambda: 160)
-    registered = {}
-    registered_calls = []
+    service.cases.valid = True
+    result = service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
+    replay = service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
 
-    def register_result(*args):
-        registered["args"] = args
-        registered_calls.append(args)
-        return {"xpDelta": 100, "firstWinRewarded": True}
-
-    monkeypatch.setattr(match_module, "register_user_result", register_result)
-
-    result = service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
-    replay = service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
-
-    assert result.valid is True
+    assert result["valid"] is True
     assert replay == result
-    assert result.status == "FINISHED"
-    assert result.xpDelta == 100
-    assert result.firstWinRewarded is True
-    assert registered["args"] == (
+    assert result["status"] == "FINISHED"
+    assert result["xpDelta"] == 100
+    assert result["firstWinRewarded"] is True
+    assert service.users.registered == [(
         USER_ID,
         MATCH_ID,
         "case-1",
@@ -259,90 +304,71 @@ def test_classic_success_uses_applied_xp_from_users_service(monkeypatch):
         60,
         None,
         "MEDIUM",
-    )
+    )]
     assert repository.get_match(MATCH_ID)["status"] == "FINISHED"
     assert repository.scores[USER_ID] == 100
     assert repository.history[USER_ID][0]["result"] == "WON"
-    assert len(registered_calls) == 1
     assert len(repository.history[USER_ID]) == 1
 
 
-def test_retry_recovers_finalizing_classic_result_without_revalidation(monkeypatch):
+def test_retry_recovers_finalizing_classic_result_without_revalidation():
     service, repository = build_match()
-    validations = []
     registrations = []
-    times = iter([160, 300])
-    registration_args = []
-    monkeypatch.setattr(match_module.time, "time", lambda: next(times))
-
-    def validate(*_args):
-        validations.append(True)
-        return True
+    service.clock = FixedClock(160, 300)
+    service.cases.valid = True
 
     def register(*args):
-        registrations.append(True)
-        registration_args.append(args)
+        registrations.append(args)
         if len(registrations) == 1:
             raise ServiceIntegrationError("resultado temporalmente no disponible")
-        return {"xpDelta": 100, "firstWinRewarded": True}
+        return AppliedUserResult(xp_delta=100, first_win_rewarded=True)
 
-    monkeypatch.setattr(match_module, "validate_case", validate)
-    monkeypatch.setattr(match_module, "register_user_result", register)
+    service.users.register = register
 
     with pytest.raises(ServiceIntegrationError):
-        service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
+        service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
     assert repository.get_match(MATCH_ID)["status"] == "FINALIZING"
 
-    result = service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
+    result = service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
 
-    assert result.xpDelta == 100
-    assert result.firstWinRewarded is True
-    assert len(validations) == 1
+    assert result["xpDelta"] == 100
+    assert result["firstWinRewarded"] is True
+    assert len(service.cases.validations) == 1
     assert len(registrations) == 2
-    assert registration_args[0][5] == registration_args[1][5] == 60
+    assert registrations[0][5] == registrations[1][5] == 60
 
 
 def test_contradictory_users_result_becomes_match_conflict_and_keeps_finalizing(
-    monkeypatch,
 ):
     service, repository = build_match()
-    monkeypatch.setattr(match_module, "validate_case", lambda *_args: True)
-    monkeypatch.setattr(match_module.time, "time", lambda: 160)
+    service.cases.valid = True
 
     def conflict(*_args):
         raise UserResultConflict("matchId contradictorio")
 
-    monkeypatch.setattr(match_module, "register_user_result", conflict)
+    service.users.register = conflict
 
     with pytest.raises(MatchConflict):
-        service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
+        service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
 
     assert repository.get_match(MATCH_ID)["status"] == "FINALIZING"
 
 
-def test_validation_error_releases_attempt_reservation(monkeypatch):
+def test_validation_error_releases_attempt_reservation():
     service, repository = build_match()
-
-    def unavailable(*_args):
-        raise ServiceIntegrationError("cases-service no disponible")
-
-    monkeypatch.setattr(match_module, "validate_case", unavailable)
+    service.cases.error = ServiceIntegrationError("cases-service no disponible")
 
     with pytest.raises(ServiceIntegrationError):
-        service.attempt_classic_match(MATCH_ID, USER_ID, build_attempt())
+        service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
 
     match = repository.get_match(MATCH_ID)
     assert match["status"] == "IN_PROGRESS"
     assert "activeAttempt" not in match
 
 
-def test_classic_attempt_requires_the_match_owner(monkeypatch):
+def test_classic_attempt_requires_the_match_owner():
     service, _repository = build_match()
-    monkeypatch.setattr(
-        match_module,
-        "validate_case",
-        lambda *_args: pytest.fail("No debe validar para otro usuario"),
-    )
 
     with pytest.raises(OwnMatch):
-        service.attempt_classic_match(MATCH_ID, "another-user", build_attempt())
+        service.attempt_classic_match(MATCH_ID, "another-user", ATTEMPT_ID, POSITIONS)
+    assert service.cases.validations == []
