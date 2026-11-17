@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.application.errors import (
+    CaseNotFound,
     CasesServiceError,
     IncorrectSolution,
     MatchNotFound,
@@ -90,6 +91,7 @@ def test_timed_finish_route_keeps_result_response_contract(client, monkeypatch):
         (OwnMatch(), 403, "No perteneces a esta partida"),
         (MatchUnavailable(), 400, "La partida ya terminó"),
         (CasesServiceError("cases down"), 503, "cases down"),
+        (CaseNotFound("missing case"), 404, "missing case"),
         (ServiceIntegrationError("users down"), 502, "users down"),
     ],
 )

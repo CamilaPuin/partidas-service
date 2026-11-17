@@ -7,6 +7,7 @@ from py_eureka_client.eureka_client import EurekaClient
 
 from app.core.redis_client import redis_client
 from app.core.gateway_security import GatewaySecretMiddleware, configured_gateway_secret
+from app.core.error_responses import register_error_handlers
 from app.messaging.kafka_ping import KafkaPingRuntime
 from app.routers.matches import router as matches_router
 from app.observability.http_metrics import HttpRequestMetricsMiddleware
@@ -66,6 +67,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Partidas Service", lifespan=lifespan)
+register_error_handlers(app)
 app.add_middleware(GatewaySecretMiddleware)
 app.add_middleware(HttpRequestMetricsMiddleware)
 app.include_router(matches_router)

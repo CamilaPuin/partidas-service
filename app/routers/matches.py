@@ -214,6 +214,8 @@ def finish_timed_match(
         raise HTTPException(status_code=403, detail="No perteneces a esta partida") from exc
     except MatchUnavailable as exc:
         raise HTTPException(status_code=400, detail="La partida ya terminó") from exc
+    except CaseNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CasesServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ServiceIntegrationError as exc:
@@ -360,6 +362,8 @@ def submit_versus_solution(
         raise HTTPException(status_code=403, detail="No perteneces a esta partida") from exc
     except MatchUnavailable as exc:
         raise HTTPException(status_code=400, detail="La partida no está en curso") from exc
+    except CaseNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CasesServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ServiceIntegrationError as exc:

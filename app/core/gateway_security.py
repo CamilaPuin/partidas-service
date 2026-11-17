@@ -6,6 +6,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.core.error_responses import error_body
+
 
 def configured_gateway_secret() -> str:
     secret = os.getenv("GATEWAY_SECRET")
@@ -49,7 +51,7 @@ class GatewaySecretMiddleware(BaseHTTPMiddleware):
         if not has_valid_gateway_secret(received, self.expected_secret):
             return JSONResponse(
                 status_code=403,
-                content={"detail": "X-Gateway-Secret inválido o ausente"},
+                content=error_body(403, "X-Gateway-Secret inválido o ausente"),
             )
 
         return await call_next(request)
