@@ -32,6 +32,7 @@ from app.schemas.matches import (
     ProgressRequest,
     RankingEntryDTO,
     ResultDTO,
+    SagaStatusDTO,
     SolutionDTO,
     TimedMatchRequest,
     VersusMatchRequest,
@@ -399,3 +400,23 @@ def get_ranking(
 )
 def get_my_history(user_id: str = Depends(get_current_user_id)):
     return match_service.get_user_history(user_id)
+
+
+@router.get(
+    "/matches/{match_id}/saga",
+    response_model=SagaStatusDTO,
+    summary="Consultar el estado de actualización del perfil por eventos",
+)
+def get_match_saga_status(
+    match_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    match = match_repository.get_match(match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Partida no encontrada")
+    if user_id not in {match.get("player1"), match.get("player2")}:
+        raise HTTPException(status_code=403, detail="No perteneces a esta partida")
+    status = match_repository.get_saga_status(match_id)
+    if status is None:
+        raise HTTPException(status_code=409, detail="La partida aún no ha iniciado su saga")
+    return status

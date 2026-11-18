@@ -6,9 +6,9 @@ from app.application.ports import (
     Clock,
     MatchIdGenerator,
     TimedMatchStore,
-    UserResultRecorder,
 )
 from app.domain.timed_match import IN_PROGRESS, calculate_outcome, finish_match_data
+from app.messaging.match_events import match_finished_event
 
 
 class CreateTimedMatch:
@@ -49,12 +49,11 @@ class FinishTimedMatch:
         self,
         store: TimedMatchStore,
         cases: CaseSolutionValidator,
-        users: UserResultRecorder,
+        users: Any,
         clock: Clock,
     ) -> None:
         self._store = store
         self._cases = cases
-        self._users = users
         self._clock = clock
 
     def execute(self, match_id: str, user_id: str, positions: List[Any]) -> Dict[str, Any]:
@@ -75,33 +74,32 @@ class FinishTimedMatch:
             now,
             is_correct,
         )
-        if not self._store.complete_match(
-            match_id,
-            IN_PROGRESS,
-            finish_match_data(match_data, outcome),
-        ):
-            raise MatchUnavailable
-
-        applied_result = self._users.register(
-            user_id,
+        event = match_finished_event(
             match_id,
             match_data["caseId"],
             "TIMED",
-            outcome.won,
             outcome.time_seconds,
-            outcome.xp_delta,
+            [{
+                "userId": user_id,
+                "won": outcome.won,
+                "xpDelta": outcome.xp_delta,
+                "difficulty": None,
+            }],
         )
-        self._store.increment_score(user_id, applied_result.xp_delta)
-        self._store.save_user_history(
-            user_id,
-            {
-                "matchId": match_id,
-                "mode": "TIMED",
-                "caseId": match_data["caseId"],
-                "result": "WON" if outcome.won else "LOST",
-                "timestamp": now,
-            },
-        )
+        final_match = finish_match_data(match_data, outcome)
+        final_match.update({
+            "sagaStatus": "PENDING",
+            "sagaEventId": event["eventId"],
+            "correlationId": event["correlationId"],
+            "finishedAt": now,
+            "matchFinishedEvent": event,
+        })
+        if not self._store.complete_match(
+            match_id,
+            IN_PROGRESS,
+            final_match,
+        ):
+            raise MatchUnavailable
         response = outcome.to_dict()
-        response["xpDelta"] = applied_result.xp_delta
+        response["sagaStatus"] = "PENDING"
         return response

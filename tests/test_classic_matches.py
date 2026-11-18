@@ -4,7 +4,6 @@ from app.application.errors import (
     MatchConflict,
     OwnMatch,
     ServiceIntegrationError,
-    UserResultConflict,
 )
 from app.application.matches import MatchService
 from app.application.ports import AppliedUserResult
@@ -81,6 +80,7 @@ class InMemoryMatchRepository:
         self.attempts = {}
         self.scores = {}
         self.history = {}
+        self.outbox = []
 
     def get_match(self, match_id):
         return self.matches.get(match_id)
@@ -163,6 +163,7 @@ class InMemoryMatchRepository:
         history_entry,
     ):
         match = self.matches[match_id]
+        match.update(match_data)
         match["status"] = "FINISHED"
         match["finalResult"] = result
         match.pop("activeAttempt")
@@ -170,8 +171,12 @@ class InMemoryMatchRepository:
             "fingerprint": fingerprint,
             "result": result,
         }
-        self.scores[user_id] = self.scores.get(user_id, 0) + score_delta
-        self.history.setdefault(user_id, []).append(history_entry)
+        event = match_data.get("matchFinishedEvent")
+        if event:
+            self.outbox.append(event)
+        else:
+            self.scores[user_id] = self.scores.get(user_id, 0) + score_delta
+            self.history.setdefault(user_id, []).append(history_entry)
         return {"action": "stored", "result": result}
 
 
@@ -284,7 +289,7 @@ def test_reusing_attempt_id_with_different_positions_conflicts():
         service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, changed)
 
 
-def test_classic_success_uses_applied_xp_from_users_service():
+def test_classic_success_publishes_match_finished_and_replays_idempotently():
     service, repository = build_match()
     service.cases.valid = True
     result = service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
@@ -293,65 +298,42 @@ def test_classic_success_uses_applied_xp_from_users_service():
     assert result["valid"] is True
     assert replay == result
     assert result["status"] == "FINISHED"
-    assert result["xpDelta"] == 100
-    assert result["firstWinRewarded"] is True
-    assert service.users.registered == [(
-        USER_ID,
-        MATCH_ID,
-        "case-1",
-        "CLASSIC",
-        True,
-        60,
-        None,
-        "MEDIUM",
-    )]
+    assert result["sagaStatus"] == "PENDING"
+    assert service.users.registered == []
     assert repository.get_match(MATCH_ID)["status"] == "FINISHED"
-    assert repository.scores[USER_ID] == 100
-    assert repository.history[USER_ID][0]["result"] == "WON"
-    assert len(repository.history[USER_ID]) == 1
+    assert repository.get_match(MATCH_ID)["sagaStatus"] == "PENDING"
+    assert len(repository.outbox) == 1
+    assert repository.outbox[0]["payload"]["results"] == [{
+        "userId": USER_ID,
+        "won": True,
+        "xpDelta": None,
+        "difficulty": "MEDIUM",
+    }]
+    assert repository.scores == {}
+    assert repository.history == {}
 
 
-def test_retry_recovers_finalizing_classic_result_without_revalidation():
+def test_retry_recovers_finalizing_classic_result_without_revalidation_or_duplicate_event():
     service, repository = build_match()
-    registrations = []
     service.clock = FixedClock(160, 300)
     service.cases.valid = True
+    result = service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
 
-    def register(*args):
-        registrations.append(args)
-        if len(registrations) == 1:
-            raise ServiceIntegrationError("resultado temporalmente no disponible")
-        return AppliedUserResult(xp_delta=100, first_win_rewarded=True)
+    assert result["sagaStatus"] == "PENDING"
+    assert len(service.cases.validations) == 1
+    assert service.users.registered == []
+    assert len(repository.outbox) == 1
 
-    service.users.register = register
 
-    with pytest.raises(ServiceIntegrationError):
-        service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
-    assert repository.get_match(MATCH_ID)["status"] == "FINALIZING"
+def test_user_registration_is_deferred_to_idempotent_event_consumer():
+    service, repository = build_match()
+    service.cases.valid = True
 
     result = service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
 
-    assert result["xpDelta"] == 100
-    assert result["firstWinRewarded"] is True
-    assert len(service.cases.validations) == 1
-    assert len(registrations) == 2
-    assert registrations[0][5] == registrations[1][5] == 60
-
-
-def test_contradictory_users_result_becomes_match_conflict_and_keeps_finalizing(
-):
-    service, repository = build_match()
-    service.cases.valid = True
-
-    def conflict(*_args):
-        raise UserResultConflict("matchId contradictorio")
-
-    service.users.register = conflict
-
-    with pytest.raises(MatchConflict):
-        service.attempt_classic_match(MATCH_ID, USER_ID, ATTEMPT_ID, POSITIONS)
-
-    assert repository.get_match(MATCH_ID)["status"] == "FINALIZING"
+    assert result["sagaStatus"] == "PENDING"
+    assert repository.get_match(MATCH_ID)["status"] == "FINISHED"
+    assert len(repository.outbox) == 1
 
 
 def test_validation_error_releases_attempt_reservation():

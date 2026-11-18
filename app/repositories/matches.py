@@ -1,10 +1,13 @@
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import redis
 
 
 FINISHED_MATCH_TTL_SECONDS = 30 * 24 * 60 * 60
+MATCH_EVENT_OUTBOX = "outbox:matches.finished.v1"
+MATCH_EVENT_INFLIGHT = "outbox:matches.finished.v1:inflight"
 
 
 class MatchRepository:
@@ -267,11 +270,15 @@ class MatchRepository:
                         ex=FINISHED_MATCH_TTL_SECONDS,
                     )
                     pipeline.sadd(attempts_key, attempt_key)
-                    pipeline.zincrby("ranking:global", score_delta, user_id)
-                    pipeline.lpush(
-                        f"user:{user_id}:history",
-                        json.dumps(history_entry),
-                    )
+                    event = final_match.get("matchFinishedEvent")
+                    if event is not None:
+                        pipeline.lpush(MATCH_EVENT_OUTBOX, json.dumps(event))
+                    else:
+                        pipeline.zincrby("ranking:global", score_delta, user_id)
+                        pipeline.lpush(
+                            f"user:{user_id}:history",
+                            json.dumps(history_entry),
+                        )
                     pipeline.expire(
                         f"match:{match_id}:progress",
                         FINISHED_MATCH_TTL_SECONDS,
@@ -313,6 +320,9 @@ class MatchRepository:
                     json.dumps(match_data),
                     ex=FINISHED_MATCH_TTL_SECONDS,
                 )
+                event = match_data.get("matchFinishedEvent")
+                if event is not None:
+                    pipeline.lpush(MATCH_EVENT_OUTBOX, json.dumps(event))
                 pipeline.expire(
                     f"match:{match_id}:progress",
                     FINISHED_MATCH_TTL_SECONDS,
@@ -321,6 +331,94 @@ class MatchRepository:
                 return True
             except redis.WatchError:
                 return False
+
+    def get_saga_status(self, match_id: str) -> Optional[Dict[str, Any]]:
+        match = self.get_match(match_id)
+        if match is None or match.get("sagaStatus") is None:
+            return None
+        return {
+            "matchId": match_id,
+            "status": match.get("sagaStatus"),
+            "updatedAt": match.get("sagaUpdatedAt"),
+            "correlationId": match.get("correlationId"),
+            "results": match.get("sagaResults", []),
+        }
+
+    def recover_inflight_match_events(self) -> int:
+        recovered = 0
+        while self.client.llen(MATCH_EVENT_INFLIGHT):
+            event = self.client.rpoplpush(MATCH_EVENT_INFLIGHT, MATCH_EVENT_OUTBOX)
+            if event is None:
+                break
+            recovered += 1
+        return recovered
+
+    def claim_match_event(self) -> Optional[str]:
+        return self.client.rpoplpush(MATCH_EVENT_OUTBOX, MATCH_EVENT_INFLIGHT)
+
+    def acknowledge_match_event(self, raw_event: str) -> None:
+        self.client.lrem(MATCH_EVENT_INFLIGHT, 1, raw_event)
+
+    def requeue_match_event(self, raw_event: str) -> None:
+        with self.client.pipeline() as pipeline:
+            pipeline.lrem(MATCH_EVENT_INFLIGHT, 1, raw_event)
+            pipeline.lpush(MATCH_EVENT_OUTBOX, raw_event)
+            pipeline.execute()
+
+    def apply_saga_outcome(
+        self,
+        match_id: str,
+        correlation_id: str,
+        status: str,
+        results: List[Dict[str, Any]],
+    ) -> str:
+        key = f"match:{match_id}"
+        while True:
+            with self.client.pipeline() as pipeline:
+                try:
+                    pipeline.watch(key)
+                    raw_match = pipeline.get(key)
+                    if raw_match is None:
+                        return "not_found"
+                    match_data = json.loads(raw_match)
+                    if match_data.get("correlationId") != correlation_id:
+                        return "stale"
+                    if match_data.get("sagaStatus") != "PENDING":
+                        return "duplicate"
+                    if status not in {"CONFIRMED", "CANCELLED"}:
+                        return "invalid"
+
+                    now = int(datetime.now(timezone.utc).timestamp())
+                    match_data["sagaStatus"] = status
+                    match_data["sagaUpdatedAt"] = now
+                    match_data["sagaResults"] = results if status == "CONFIRMED" else []
+                    pipeline.multi()
+                    pipeline.set(
+                        key,
+                        json.dumps(match_data),
+                        ex=FINISHED_MATCH_TTL_SECONDS,
+                    )
+                    if status == "CONFIRMED":
+                        for result in results:
+                            user_id = result.get("userId")
+                            xp_delta = result.get("xpDelta")
+                            if not isinstance(user_id, str) or type(xp_delta) is not int:
+                                raise ValueError("Resultado de saga confirmado inválido")
+                            history_entry = {
+                                "matchId": match_id,
+                                "mode": match_data.get("mode", ""),
+                                "caseId": match_data.get("caseId", ""),
+                                "result": "WON" if result.get("won") else "LOST",
+                                "timestamp": match_data.get("finishedAt", now),
+                            }
+                            pipeline.zincrby("ranking:global", xp_delta, user_id)
+                            pipeline.lpush(
+                                f"user:{user_id}:history", json.dumps(history_entry)
+                            )
+                    pipeline.execute()
+                    return status.lower()
+                except redis.WatchError:
+                    continue
 
     def add_open_match(self, match_id: str) -> None:
         self.client.sadd("matches:open", match_id)

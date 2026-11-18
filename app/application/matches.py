@@ -9,8 +9,8 @@ from app.application.errors import (
     MatchUnavailable,
     OwnMatch,
     ServiceIntegrationError,
-    UserResultConflict,
 )
+from app.messaging.match_events import match_finished_event
 from app.application.ports import (
     CasesGateway,
     Clock,
@@ -153,27 +153,31 @@ class MatchService:
 
         time_taken = match_data["finalizingTimeSeconds"]
         finalized_at = match_data["finalizingAt"]
-        try:
-            user_result = self.users.register(
-                user_id,
-                match_id,
-                match_data["caseId"],
-                "CLASSIC",
-                True,
-                time_taken,
-                None,
-                match_data["difficulty"],
-            )
-        except UserResultConflict as exc:
-            raise MatchConflict from exc
-
         result = {
             "attemptId": attempt_id,
             "valid": True,
             "status": "FINISHED",
-            "xpDelta": user_result.xp_delta,
-            "firstWinRewarded": user_result.first_win_rewarded,
+            "sagaStatus": "PENDING",
         }
+        event = match_finished_event(
+            match_id,
+            match_data["caseId"],
+            "CLASSIC",
+            time_taken,
+            [{
+                "userId": user_id,
+                "won": True,
+                "xpDelta": None,
+                "difficulty": match_data["difficulty"],
+            }],
+        )
+        match_data.update({
+            "sagaStatus": "PENDING",
+            "sagaEventId": event["eventId"],
+            "correlationId": event["correlationId"],
+            "finishedAt": finalized_at,
+            "matchFinishedEvent": event,
+        })
         completion = self.repository.complete_classic_attempt(
             match_id,
             attempt_id,
@@ -181,7 +185,7 @@ class MatchService:
             match_data,
             result,
             user_id,
-            user_result.xp_delta,
+            0,
             {
                 "matchId": match_id,
                 "mode": "CLASSIC",
@@ -311,6 +315,29 @@ class MatchService:
         winner_id = player_id
         match_data["status"] = "FINISHED"
         match_data["winnerId"] = winner_id
+        now = self.clock.now_seconds()
+        time_taken = max(0, now - int(match_data.get("startedAt", now)))
+        players = [match_data["player1"], match_data["player2"]]
+        results = [
+            {
+                "userId": player,
+                "won": player == winner_id,
+                "xpDelta": 100 if player == winner_id else 0,
+                "difficulty": None,
+            }
+            for player in players
+            if player
+        ]
+        event = match_finished_event(
+            match_id, match_data["caseId"], "VERSUS", time_taken, results
+        )
+        match_data.update({
+            "sagaStatus": "PENDING",
+            "sagaEventId": event["eventId"],
+            "correlationId": event["correlationId"],
+            "finishedAt": now,
+            "matchFinishedEvent": event,
+        })
         if not self.repository.complete_match(
             match_id,
             "IN_PROGRESS",
@@ -318,43 +345,12 @@ class MatchService:
         ):
             raise MatchUnavailable
 
-        now = self.clock.now_seconds()
-        time_taken = now - match_data["startedAt"]
-        players = [match_data["player1"], match_data["player2"]]
-        for player in players:
-            if player:
-                won = player == winner_id
-                xp_delta = 100 if won else 0
-                try:
-                    self.users.register(
-                        player,
-                        match_id,
-                        match_data["caseId"],
-                        "VERSUS",
-                        won,
-                        time_taken,
-                        xp_delta,
-                    )
-                except UserResultConflict as exc:
-                    raise MatchConflict from exc
-
-        for player in players:
-            if player:
-                won = player == winner_id
-                xp_delta = 100 if won else 0
-                self.repository.save_user_history(
-                    player,
-                    {
-                        "matchId": match_id,
-                        "mode": "VERSUS",
-                        "caseId": match_data["caseId"],
-                        "result": "WON" if won else "LOST",
-                        "timestamp": now,
-                    },
-                )
-                if won:
-                    self.repository.increment_score(player, xp_delta)
-        return {"winnerId": winner_id, "matchId": match_id, "xpDelta": 100}
+        return {
+            "winnerId": winner_id,
+            "matchId": match_id,
+            "xpDelta": 100,
+            "sagaStatus": "PENDING",
+        }
 
     def get_ranking(self, limit: int) -> List[Dict[str, Any]]:
         entries = self.repository.list_ranking(limit)

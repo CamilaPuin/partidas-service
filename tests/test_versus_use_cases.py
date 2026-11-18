@@ -6,7 +6,6 @@ from app.application.errors import (
     ServiceIntegrationError,
 )
 from app.application.matches import MatchService
-from app.application.ports import AppliedUserResult
 
 
 class FakeStore:
@@ -23,6 +22,7 @@ class FakeStore:
         self.events = []
         self.history = []
         self.scores = []
+        self.outbox = []
 
     def get_match(self, match_id):
         self.events.append(("get", match_id))
@@ -33,6 +33,8 @@ class FakeStore:
         if not self.match or self.match["status"] != expected_status:
             return False
         self.match = dict(match_data)
+        if match_data.get("matchFinishedEvent"):
+            self.outbox.append(match_data["matchFinishedEvent"])
         return True
 
     def increment_score(self, user_id, delta):
@@ -64,7 +66,6 @@ class FakeUsers:
         self.calls.append(args)
         if self.error:
             raise self.error
-        return AppliedUserResult(xp_delta=args[-1], first_win_rewarded=False)
 
 
 class FixedClock:
@@ -85,24 +86,33 @@ def build_service(valid=True, cases_error=None, users_error=None):
     return service, store, cases, users
 
 
-def test_versus_validates_against_cases_then_records_both_players_once():
+def test_versus_validates_and_enqueues_one_event_for_both_players():
     service, store, cases, users = build_service()
     positions = [{"characterId": "S1", "x": 0, "y": 0}]
 
     result = service.submit_versus_solution("m-1", "user-1", positions)
 
-    assert result == {"winnerId": "user-1", "matchId": "m-1", "xpDelta": 100}
+    assert result == {
+        "winnerId": "user-1", "matchId": "m-1", "xpDelta": 100,
+        "sagaStatus": "PENDING",
+    }
     assert cases.calls == [("case-1", positions)]
-    assert [call[0] for call in users.calls] == ["user-1", "user-2"]
+    assert users.calls == []
     assert store.match["status"] == "FINISHED"
-    assert store.scores == [("user-1", 100)]
-    assert [entry[1]["result"] for entry in store.history] == ["WON", "LOST"]
+    assert store.match["sagaStatus"] == "PENDING"
+    assert len(store.outbox) == 1
+    assert store.outbox[0]["payload"]["results"] == [
+        {"userId": "user-1", "won": True, "xpDelta": 100, "difficulty": None},
+        {"userId": "user-2", "won": False, "xpDelta": 0, "difficulty": None},
+    ]
+    assert store.scores == []
+    assert store.history == []
 
     with pytest.raises(MatchUnavailable):
         service.submit_versus_solution("m-1", "user-1", positions)
 
     assert len(cases.calls) == 1
-    assert len(users.calls) == 2
+    assert len(users.calls) == 0
 
 
 def test_incorrect_versus_solution_does_not_finish_or_record_results():
@@ -129,16 +139,16 @@ def test_cases_service_failure_leaves_versus_match_open():
     assert store.match["status"] == "IN_PROGRESS"
 
 
-def test_users_service_failure_is_propagated_after_versus_match_is_closed():
+def test_users_service_failure_is_retried_asynchronously_after_versus_close():
     failure = ServiceIntegrationError("users unavailable")
     service, store, cases, users = build_service(users_error=failure)
 
-    with pytest.raises(ServiceIntegrationError) as raised:
-        service.submit_versus_solution("m-1", "user-1", [])
+    result = service.submit_versus_solution("m-1", "user-1", [])
 
-    assert raised.value is failure
+    assert result["sagaStatus"] == "PENDING"
     assert len(cases.calls) == 1
-    assert len(users.calls) == 1
+    assert len(users.calls) == 0
+    assert len(store.outbox) == 1
     assert store.match["status"] == "FINISHED"
     assert store.scores == []
     assert store.history == []

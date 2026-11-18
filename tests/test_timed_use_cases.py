@@ -29,6 +29,7 @@ class FakeStore:
         self.score_updates = []
         self.history = []
         self.completed_data = None
+        self.outbox = []
         self._lock = Lock()
 
     def get_match(self, match_id):
@@ -48,6 +49,8 @@ class FakeStore:
                 return False
             self.completed_data = dict(match_data)
             self.match = dict(match_data)
+            if match_data.get("matchFinishedEvent"):
+                self.outbox.append(match_data["matchFinishedEvent"])
             return True
 
     def increment_score(self, user_id, delta):
@@ -127,7 +130,7 @@ def test_create_timed_match_persists_current_shape_and_returns_response_fields()
     }
 
 
-def test_finish_winning_match_preserves_operation_order_and_side_effects():
+def test_finish_winning_match_publishes_durable_match_finished_event():
     store = FakeStore(match_data())
     events = store.events
     cases = FakeCases(events=events)
@@ -137,31 +140,20 @@ def test_finish_winning_match_preserves_operation_order_and_side_effects():
 
     response = use_case.execute("m-1", "user-1", positions)
 
-    assert response == {"won": True, "timeSeconds": 50, "bonus": 20, "xpDelta": 70}
+    assert response == {
+        "won": True, "timeSeconds": 50, "bonus": 20, "xpDelta": 70,
+        "sagaStatus": "PENDING",
+    }
     assert cases.calls == [("case-1", positions)]
-    assert users.calls == [("user-1", "m-1", "case-1", "TIMED", True, 50, 70)]
-    assert [event[0] for event in events] == [
-        "get",
-        "validate",
-        "complete",
-        "register",
-        "score",
-        "history",
-    ]
+    assert users.calls == []
+    assert [event[0] for event in events] == ["get", "validate", "complete"]
     assert store.completed_data["status"] == "FINISHED"
-    assert store.completed_data["finalResult"] == response
-    assert store.history == [
-        (
-            "user-1",
-            {
-                "matchId": "m-1",
-                "mode": "TIMED",
-                "caseId": "case-1",
-                "result": "WON",
-                "timestamp": 150,
-            },
-        )
-    ]
+    assert store.completed_data["sagaStatus"] == "PENDING"
+    assert store.completed_data["finalResult"]["won"] is True
+    assert store.outbox[0]["payload"]["results"][0] == {
+        "userId": "user-1", "won": True, "xpDelta": 70, "difficulty": None,
+    }
+    assert store.history == []
 
 
 def test_duplicate_timed_finish_is_rejected_without_revalidating_or_reapplying_result():
@@ -175,7 +167,7 @@ def test_duplicate_timed_finish_is_rejected_without_revalidating_or_reapplying_r
         use_case.execute("m-1", "user-1", [])
 
     assert len(cases.calls) == 1
-    assert len(users.calls) == 1
+    assert len(users.calls) == 0
 
 
 def test_finish_allows_correct_solution_when_now_equals_deadline():
@@ -184,7 +176,10 @@ def test_finish_allows_correct_solution_when_now_equals_deadline():
 
     response = use_case.execute("m-1", "user-1", [])
 
-    assert response == {"won": True, "timeSeconds": 60, "bonus": 0, "xpDelta": 50}
+    assert response == {
+        "won": True, "timeSeconds": 60, "bonus": 0, "xpDelta": 50,
+        "sagaStatus": "PENDING",
+    }
 
 
 def test_incorrect_or_expired_solution_registers_loss_without_bonus():
@@ -200,10 +195,9 @@ def test_incorrect_or_expired_solution_registers_loss_without_bonus():
             "timeSeconds": now - 100,
             "bonus": 0,
             "xpDelta": -10,
+            "sagaStatus": "PENDING",
         }
-        assert users.calls == [
-            ("user-1", "m-1", "case-1", "TIMED", False, now - 100, -10)
-        ]
+        assert users.calls == []
 
 
 def test_deadline_expiry_still_validates_case_before_result_transition():
@@ -263,7 +257,7 @@ def test_failed_atomic_transition_rejects_without_recording_user_result():
     assert store.history == []
 
 
-def test_users_failure_after_redis_close_preserves_known_partial_failure():
+def test_users_failure_is_deferred_to_the_durable_event_retry_path():
     store = FakeStore(match_data())
     error = RuntimeError("users unavailable")
     use_case = FinishTimedMatch(
@@ -273,24 +267,27 @@ def test_users_failure_after_redis_close_preserves_known_partial_failure():
         FixedClock(120),
     )
 
-    with pytest.raises(RuntimeError) as raised:
-        use_case.execute("m-1", "user-1", [])
-
-    assert raised.value is error
+    response = use_case.execute("m-1", "user-1", [])
+    assert response["sagaStatus"] == "PENDING"
     assert store.match["status"] == "FINISHED"
+    assert store.outbox
     assert store.score_updates == []
     assert store.history == []
 
 
-def test_applied_users_xp_controls_result_and_ranking_when_it_differs():
+def test_event_uses_server_calculated_xp_and_defers_ranking_until_confirmation():
     store = FakeStore(match_data())
     users = FakeUsers(applied_xp_delta=13)
     use_case = FinishTimedMatch(store, FakeCases(), users, FixedClock(150))
 
     response = use_case.execute("m-1", "user-1", [])
 
-    assert response == {"won": True, "timeSeconds": 50, "bonus": 20, "xpDelta": 13}
-    assert store.score_updates == [("user-1", 13)]
+    assert response == {
+        "won": True, "timeSeconds": 50, "bonus": 20, "xpDelta": 70,
+        "sagaStatus": "PENDING",
+    }
+    assert store.outbox[0]["payload"]["results"][0]["xpDelta"] == 70
+    assert store.score_updates == []
 
 
 def test_simultaneous_finish_requests_close_the_match_only_once():
@@ -311,6 +308,7 @@ def test_simultaneous_finish_requests_close_the_match_only_once():
         results = list(executor.map(lambda _index: finish(), range(2)))
 
     assert results.count("unavailable") == 1
-    assert len(users.calls) == 1
-    assert len(store.score_updates) == 1
-    assert len(store.history) == 1
+    assert len(users.calls) == 0
+    assert len(store.outbox) == 1
+    assert len(store.score_updates) == 0
+    assert len(store.history) == 0

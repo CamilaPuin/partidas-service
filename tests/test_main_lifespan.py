@@ -28,8 +28,19 @@ def test_lifespan_starts_and_stops_kafka_with_eureka(monkeypatch):
         async def stop(self):
             events.append("kafka-stop")
 
+    class FakeSaga:
+        def __init__(self, _repository):
+            pass
+
+        async def start(self):
+            events.append("saga-start")
+
+        async def stop(self):
+            events.append("saga-stop")
+
     monkeypatch.setattr(main, "EurekaClient", FakeEureka)
     monkeypatch.setattr(main, "KafkaPingRuntime", FakeKafka)
+    monkeypatch.setattr(main, "MatchSagaRuntime", FakeSaga)
 
     async def run_lifespan():
         async with main.lifespan(SimpleNamespace()):
@@ -40,7 +51,9 @@ def test_lifespan_starts_and_stops_kafka_with_eureka(monkeypatch):
     assert events == [
         "eureka-start",
         "kafka-start",
+        "saga-start",
         "serving",
+        "saga-stop",
         "kafka-stop",
         "eureka-stop",
     ]

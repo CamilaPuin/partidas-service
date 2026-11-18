@@ -1,6 +1,6 @@
 import time
 
-from prometheus_client import CollectorRegistry, Histogram
+from prometheus_client import CollectorRegistry, Counter, Histogram
 
 
 APPLICATION = "partidas-service"
@@ -11,6 +11,18 @@ HTTP_REQUEST_DURATION = Histogram(
     "HTTP server request duration in seconds",
     labelnames=("application", "method", "uri", "status"),
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+    registry=REGISTRY,
+)
+MATCH_FINISHED_PUBLISHED = Counter(
+    "match_finished_published_total",
+    "MatchFinished events published from the durable Redis outbox",
+    labelnames=("mode",),
+    registry=REGISTRY,
+)
+MATCH_SAGA_TRANSITIONS = Counter(
+    "match_saga_transitions_total",
+    "Terminal match result saga transitions applied",
+    labelnames=("mode", "status"),
     registry=REGISTRY,
 )
 

@@ -76,6 +76,7 @@ class ResultDTO(BaseModel):
     timeSeconds: int
     bonus: int
     xpDelta: int
+    sagaStatus: str = "PENDING"
 
 
 class ClassicAttemptResultDTO(BaseModel):
@@ -84,12 +85,22 @@ class ClassicAttemptResultDTO(BaseModel):
     status: str
     xpDelta: Optional[int] = None
     firstWinRewarded: Optional[bool] = None
+    sagaStatus: Optional[str] = None
 
 
 class VersusResultDTO(BaseModel):
     winnerId: str
     matchId: str
     xpDelta: int
+    sagaStatus: str = "PENDING"
+
+
+class SagaStatusDTO(BaseModel):
+    matchId: str
+    status: str
+    updatedAt: Optional[int] = None
+    correlationId: Optional[str] = None
+    results: list[dict] = Field(default_factory=list)
 
 
 class ProgressRequest(BaseModel):

@@ -80,6 +80,7 @@ def test_timed_finish_route_keeps_result_response_contract(client, monkeypatch):
         "timeSeconds": 12,
         "bonus": 8,
         "xpDelta": 58,
+        "sagaStatus": "PENDING",
     }
 
 

@@ -9,7 +9,9 @@ from app.core.redis_client import redis_client
 from app.core.gateway_security import GatewaySecretMiddleware, configured_gateway_secret
 from app.core.error_responses import register_error_handlers
 from app.messaging.kafka_ping import KafkaPingRuntime
+from app.messaging.match_saga_runtime import MatchSagaRuntime
 from app.routers.matches import router as matches_router
+from app.repositories.matches import MatchRepository
 from app.observability.http_metrics import HttpRequestMetricsMiddleware
 from app.observability.metrics_router import metrics_credentials, router as metrics_router
 
@@ -54,16 +56,21 @@ async def lifespan(app: FastAPI):
         health_check_url=f"{public_base_url}/health",
     )
     kafka_runtime = KafkaPingRuntime()
+    saga_runtime = MatchSagaRuntime(MatchRepository(redis_client))
 
     await eureka_client.start()
     await kafka_runtime.start()
+    await saga_runtime.start()
     try:
         yield
     finally:
         try:
-            await kafka_runtime.stop()
+            await saga_runtime.stop()
         finally:
-            await eureka_client.stop()
+            try:
+                await kafka_runtime.stop()
+            finally:
+                await eureka_client.stop()
 
 
 app = FastAPI(title="Partidas Service", lifespan=lifespan)
