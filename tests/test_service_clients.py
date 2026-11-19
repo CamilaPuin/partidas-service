@@ -97,6 +97,77 @@ def test_get_case_difficulty_uses_internal_cases_request(monkeypatch):
     assert seen["request"].get_header("X-gateway-secret") == "secret-test"
 
 
+def test_get_case_summary_requires_server_defined_level(monkeypatch):
+    monkeypatch.setenv("GATEWAY_SECRET", "secret-test")
+    monkeypatch.setattr(
+        service_clients,
+        "_service_url",
+        lambda _name: "http://casos-service:8082",
+    )
+
+    class CaseResponse(FakeResponse):
+        def read(self):
+            return b'{"id":"case-1","difficulty":"HARD","requiredLevel":10}'
+
+    monkeypatch.setattr(service_clients, "urlopen", lambda *_args, **_kwargs: CaseResponse())
+
+    assert service_clients.get_case_summary("case-1") == {
+        "id": "case-1",
+        "difficulty": "HARD",
+        "requiredLevel": 10,
+    }
+
+
+def test_list_case_summaries_uses_cases_catalog_and_gateway_secret(monkeypatch):
+    monkeypatch.setenv("GATEWAY_SECRET", "secret-test")
+    monkeypatch.setattr(
+        service_clients,
+        "_service_url",
+        lambda _name: "http://casos-service:8082",
+    )
+    seen = {}
+
+    class CatalogResponse(FakeResponse):
+        def read(self):
+            return b'[{"id":"case-1","difficulty":"EASY","requiredLevel":1}]'
+
+    def fake_urlopen(request, timeout):
+        seen["request"] = request
+        return CatalogResponse()
+
+    monkeypatch.setattr(service_clients, "urlopen", fake_urlopen)
+
+    assert service_clients.list_case_summaries() == [
+        {"id": "case-1", "difficulty": "EASY", "requiredLevel": 1}
+    ]
+    assert seen["request"].full_url.endswith("/cases")
+    assert seen["request"].get_header("X-gateway-secret") == "secret-test"
+
+
+def test_get_solved_case_ids_uses_internal_users_request(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "internal-test")
+    monkeypatch.setattr(
+        service_clients,
+        "_service_url",
+        lambda _name: "http://usuarios-service:8081",
+    )
+    seen = {}
+
+    class SolvedCasesResponse(FakeResponse):
+        def read(self):
+            return b'["case-1","case-2"]'
+
+    def fake_urlopen(request, timeout):
+        seen["request"] = request
+        return SolvedCasesResponse()
+
+    monkeypatch.setattr(service_clients, "urlopen", fake_urlopen)
+
+    assert service_clients.get_solved_case_ids("user-1") == ["case-1", "case-2"]
+    assert seen["request"].full_url.endswith("/users/user-1/solved-cases")
+    assert seen["request"].get_header("X-internal-token") == "internal-test"
+
+
 def test_register_user_result_uses_external_id_and_internal_token(monkeypatch):
     external_id = "603fba8d-bb2c-4994-bc27-e9c40e30fec8"
     monkeypatch.setenv("INTERNAL_API_TOKEN", "internal-test")

@@ -1,11 +1,13 @@
 from typing import Any, Dict, List
 
-from app.application.errors import MatchNotFound, MatchUnavailable, OwnMatch
+from app.application.errors import MatchLocked, MatchNotFound, MatchUnavailable, OwnMatch
 from app.application.ports import (
     CaseSolutionValidator,
+    CasesGateway,
     Clock,
     MatchIdGenerator,
     TimedMatchStore,
+    UserProgressionProvider,
 )
 from app.domain.timed_match import IN_PROGRESS, calculate_outcome, finish_match_data
 from app.messaging.match_events import match_finished_event
@@ -15,14 +17,22 @@ class CreateTimedMatch:
     def __init__(
         self,
         store: TimedMatchStore,
+        cases: CasesGateway,
+        users: UserProgressionProvider,
         clock: Clock,
         ids: MatchIdGenerator,
     ) -> None:
         self._store = store
+        self._cases = cases
+        self._users = users
         self._clock = clock
         self._ids = ids
 
     def execute(self, case_id: str, time_limit_seconds: int, user_id: str) -> Dict[str, Any]:
+        case = self._cases.get_case_summary(case_id)
+        progression = self._users.get_progression(user_id)
+        if progression["level"] < case["requiredLevel"]:
+            raise MatchLocked
         match_id = self._ids.new_id()
         now = self._clock.now_seconds()
         deadline = now + time_limit_seconds

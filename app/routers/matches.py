@@ -10,6 +10,7 @@ from app.application.errors import (
     MatchLocked,
     MatchNotFound,
     MatchUnavailable,
+    NoEligibleCase,
     OwnMatch,
     ServiceIntegrationError,
 )
@@ -60,6 +61,8 @@ match_service = MatchService(
 )
 create_timed_match_use_case = CreateTimedMatch(
     store=match_repository,
+    cases=cases_adapter,
+    users=users_adapter,
     clock=clock_adapter,
     ids=ids_adapter,
 )
@@ -167,6 +170,10 @@ def attempt_classic_match(
     summary="Crear partida contrarreloj",
     responses={
         200: {"description": "Partida contrarreloj creada"},
+        403: {"description": "El nivel del usuario no desbloquea el caso"},
+        404: {"description": "Caso no encontrado"},
+        502: {"description": "Usuarios no disponible"},
+        503: {"description": "Casos no disponible"},
         422: {"description": "Solicitud inválida"},
     },
 )
@@ -174,11 +181,23 @@ def create_timed_match(
     request: TimedMatchRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    return create_timed_match_use_case.execute(
-        request.caseId,
-        request.timeLimitSeconds,
-        user_id,
-    )
+    try:
+        return create_timed_match_use_case.execute(
+            request.caseId,
+            request.timeLimitSeconds,
+            user_id,
+        )
+    except MatchLocked as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="El nivel actual no desbloquea este caso",
+        ) from exc
+    except CaseNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ServiceIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post(
@@ -230,6 +249,9 @@ def finish_timed_match(
     summary="Crear partida versus",
     responses={
         200: {"description": "Partida versus creada"},
+        409: {"description": "El usuario no tiene casos disponibles para jugar"},
+        502: {"description": "Progresión o historial de usuario no disponible"},
+        503: {"description": "Catálogo de casos no disponible"},
         422: {"description": "Solicitud inválida"},
     },
 )
@@ -237,7 +259,17 @@ def create_versus_match(
     request: VersusMatchRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    return match_service.create_versus_match(request.caseId, user_id)
+    try:
+        return match_service.create_versus_match(user_id)
+    except NoEligibleCase as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="No hay casos disponibles que puedas jugar y no hayas resuelto",
+        ) from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ServiceIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get(
@@ -259,6 +291,9 @@ def list_open_matches(_user_id: str = Depends(get_current_user_id)):
     responses={
         400: {"description": "La partida no está disponible"},
         404: {"description": "Partida no encontrada"},
+        409: {"description": "Los jugadores no comparten un caso elegible"},
+        502: {"description": "Progresión o historial de usuario no disponible"},
+        503: {"description": "Catálogo de casos no disponible"},
         200: {"description": "Partida unida correctamente"},
         422: {"description": "Solicitud inválida"},
     },
@@ -269,6 +304,11 @@ def join_versus_match(
 ):
     try:
         return match_service.join_versus_match(match_id, user_id)
+    except NoEligibleCase as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="No hay un caso que ambos jugadores puedan jugar y no hayan resuelto",
+        ) from exc
     except MatchNotFound as exc:
         raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
     except MatchUnavailable as exc:
@@ -281,6 +321,12 @@ def join_versus_match(
             status_code=400,
             detail="No puedes unirte a tu propia partida",
         ) from exc
+    except CaseNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CasesServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ServiceIntegrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.put(

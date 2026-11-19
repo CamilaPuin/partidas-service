@@ -6,8 +6,10 @@ from app.application.errors import (
     CaseNotFound,
     CasesServiceError,
     IncorrectSolution,
+    MatchLocked,
     MatchNotFound,
     MatchUnavailable,
+    NoEligibleCase,
     OwnMatch,
     ServiceIntegrationError,
 )
@@ -58,6 +60,59 @@ def test_timed_create_route_keeps_existing_response_contract(client, monkeypatch
         "status": None,
         "player1": None,
         "player2": None,
+    }
+
+
+def test_timed_create_route_rejects_locked_case(client, monkeypatch):
+    def fail(*_args):
+        raise MatchLocked
+
+    monkeypatch.setattr(matches.create_timed_match_use_case, "execute", fail)
+
+    response = client.post(
+        "/matches/timed",
+        headers=headers(),
+        json={"caseId": "case-1", "timeLimitSeconds": 60},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "El nivel actual no desbloquea este caso"}
+
+
+def test_versus_create_route_does_not_accept_or_choose_case_from_client(client, monkeypatch):
+    monkeypatch.setattr(
+        matches.match_service,
+        "create_versus_match",
+        lambda user_id: {
+            "matchId": "match-1",
+            "caseId": None,
+            "status": "WAITING",
+            "player1": user_id,
+        },
+    )
+
+    response = client.post(
+        "/matches/versus",
+        headers=headers(),
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["caseId"] is None
+    assert response.json()["status"] == "WAITING"
+
+
+def test_versus_create_route_reports_no_eligible_case(client, monkeypatch):
+    def fail(*_args):
+        raise NoEligibleCase
+
+    monkeypatch.setattr(matches.match_service, "create_versus_match", fail)
+
+    response = client.post("/matches/versus", headers=headers(), json={})
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "No hay casos disponibles que puedas jugar y no hayas resuelto"
     }
 
 

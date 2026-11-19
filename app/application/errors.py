@@ -22,6 +22,10 @@ class MatchLocked(Exception):
     pass
 
 
+class NoEligibleCase(Exception):
+    pass
+
+
 class ServiceIntegrationError(Exception):
     pass
 

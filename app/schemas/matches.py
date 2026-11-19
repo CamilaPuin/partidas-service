@@ -27,7 +27,7 @@ class TimedMatchRequest(BaseModel):
 
 
 class VersusMatchRequest(BaseModel):
-    caseId: str
+    caseId: Optional[str] = None
 
 
 class MatchDTO(BaseModel):

@@ -3,7 +3,10 @@ import uuid
 from typing import Any, List
 
 from app.core.service_clients import (
+    get_case_summary,
     get_case_difficulty,
+    get_solved_case_ids,
+    list_case_summaries,
     get_user_progression,
     register_user_result,
     validate_case,
@@ -25,6 +28,12 @@ class CasesHttpAdapter:
     def get_difficulty(self, case_id: str) -> str:
         return get_case_difficulty(case_id)
 
+    def get_case_summary(self, case_id: str) -> dict:
+        return get_case_summary(case_id)
+
+    def list_case_summaries(self) -> list[dict]:
+        return list_case_summaries()
+
     def validate(self, case_id: str, positions: List[Any]) -> bool:
         return validate_case(case_id, positions)
 
@@ -32,6 +41,9 @@ class CasesHttpAdapter:
 class UsersHttpAdapter:
     def get_progression(self, user_id: str) -> dict:
         return get_user_progression(user_id)
+
+    def get_solved_case_ids(self, user_id: str) -> list[str]:
+        return get_solved_case_ids(user_id)
 
     def register(
         self,

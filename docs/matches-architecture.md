@@ -21,8 +21,17 @@ import FastAPI, Pydantic, Redis, Eureka, HTTP clients or infrastructure
 adapters. `CasesHttpAdapter.validate()` delegates to the real
 `POST /cases/{caseId}/validate` operation through the service client; there is
 no client-provided `isCorrect` value or production-side simulated validation.
-CLASSIC creation also retrieves case difficulty from `casos-service` and user
-progression from `usuarios-service` before applying the level gate.
+CLASSIC and TIMED creation retrieve the selected case's `requiredLevel` from
+`casos-service` and current progression from `usuarios-service` before applying
+the level gate. All modes use the same canonical case catalog.
+
+VERSUS creates a waiting room without a case. Once a second player joins,
+`partidas-service` reads both players' current levels and solved case IDs,
+filters the case catalog to cases both can play and neither has won, and
+assigns one eligible case. It returns the assigned ID to the joining player and
+includes it in progress responses so the waiting player's client loads the same
+case. If no eligible case exists, joining returns HTTP 409 and the room remains
+available for another opponent.
 
 ## Duplicate submissions and service errors
 
@@ -39,6 +48,9 @@ progression from `usuarios-service` before applying the level gate.
 - Service integration failures keep their existing HTTP mapping: missing cases
   return 404, case-service failures return 503, and other upstream failures
   return 502. Invalid solutions retain each mode's existing response contract.
+- `usuarios-service` exposes solved case IDs only to internal service callers;
+  the query includes distinct cases won in any mode, preserving historical
+  completion records as the source for VERSUS eligibility.
 
 Timed and versus completion still span Redis and `usuarios-service`, which do
 not share a transaction. If users-service fails after Redis marks a match
