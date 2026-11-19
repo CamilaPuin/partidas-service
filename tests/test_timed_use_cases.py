@@ -3,7 +3,7 @@ from threading import Barrier, Lock
 
 import pytest
 
-from app.application.errors import MatchNotFound, MatchUnavailable, OwnMatch
+from app.application.errors import MatchLocked, MatchNotFound, MatchUnavailable, OwnMatch
 from app.application.ports import AppliedUserResult
 from app.application.timed_matches import CreateTimedMatch, FinishTimedMatch
 
@@ -69,6 +69,10 @@ class FakeCases:
         self.barrier = barrier
         self.error = error
         self.calls = []
+        self.required_level = 1
+
+    def get_case_summary(self, case_id):
+        return {"id": case_id, "difficulty": "EASY", "requiredLevel": self.required_level}
 
     def validate(self, case_id, positions):
         self.events.append(("validate", case_id))
@@ -81,11 +85,15 @@ class FakeCases:
 
 
 class FakeUsers:
-    def __init__(self, events=None, error=None, applied_xp_delta=None):
+    def __init__(self, events=None, error=None, applied_xp_delta=None, level=1):
         self.events = events if events is not None else []
         self.error = error
         self.applied_xp_delta = applied_xp_delta
+        self.level = level
         self.calls = []
+
+    def get_progression(self, _user_id):
+        return {"level": self.level}
 
     def register(self, *args):
         self.events.append(("register",) + args)
@@ -112,7 +120,7 @@ def match_data(status="IN_PROGRESS"):
 
 def test_create_timed_match_persists_current_shape_and_returns_response_fields():
     store = FakeStore()
-    use_case = CreateTimedMatch(store, FixedClock(100), FixedIds())
+    use_case = CreateTimedMatch(store, FakeCases(), FakeUsers(), FixedClock(100), FixedIds())
 
     response = use_case.execute("case-1", 60, "user-1")
 
@@ -128,6 +136,19 @@ def test_create_timed_match_persists_current_shape_and_returns_response_fields()
         "status": "IN_PROGRESS",
         "player1": "user-1",
     }
+
+
+def test_create_timed_match_rejects_case_above_current_level():
+    store = FakeStore()
+    cases = FakeCases()
+    cases.required_level = 5
+    users = FakeUsers(level=4)
+    use_case = CreateTimedMatch(store, cases, users, FixedClock(100), FixedIds())
+
+    with pytest.raises(MatchLocked):
+        use_case.execute("case-1", 60, "user-1")
+
+    assert store.match is None
 
 
 def test_finish_winning_match_publishes_durable_match_finished_event():

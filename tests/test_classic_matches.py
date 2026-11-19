@@ -21,6 +21,7 @@ POSITIONS = [
 class FakeCases:
     def __init__(self):
         self.difficulty = "MEDIUM"
+        self.required_level = 5
         self.valid = False
         self.error = None
         self.validations = []
@@ -30,6 +31,23 @@ class FakeCases:
             raise self.error
         self.difficulty_calls = getattr(self, "difficulty_calls", []) + [case_id]
         return self.difficulty
+
+    def get_case_summary(self, case_id):
+        if self.error:
+            raise self.error
+        self.difficulty_calls = getattr(self, "difficulty_calls", []) + [case_id]
+        return {
+            "id": case_id,
+            "difficulty": self.difficulty,
+            "requiredLevel": self.required_level,
+        }
+
+    def list_case_summaries(self):
+        return [{
+            "id": "case-1",
+            "difficulty": self.difficulty,
+            "requiredLevel": self.required_level,
+        }]
 
     def validate(self, case_id, positions):
         self.validations.append((case_id, positions))
@@ -50,6 +68,9 @@ class FakeUsers:
         if self.error:
             raise self.error
         return {"level": self.level}
+
+    def get_solved_case_ids(self, user_id):
+        return []
 
     def register(self, *args):
         self.registered.append(args)
@@ -208,6 +229,7 @@ def test_classic_match_uses_server_case_difficulty_and_stores_snapshot():
     repository = InMemoryMatchRepository()
     cases = FakeCases()
     cases.difficulty = "HARD"
+    cases.required_level = 10
     service = MatchService(
         store=repository,
         cases=cases,
@@ -228,6 +250,29 @@ def test_classic_match_uses_server_case_difficulty_and_stores_snapshot():
     assert stored["startedAt"] == 1234
     assert stored["mode"] == "CLASSIC"
     assert stored["player1"] == USER_ID
+
+
+def test_classic_match_rejects_case_above_current_level():
+    repository = InMemoryMatchRepository()
+    cases = FakeCases()
+    cases.difficulty = "MEDIUM"
+    cases.required_level = 5
+    users = FakeUsers()
+    users.level = 4
+    service = MatchService(
+        store=repository,
+        cases=cases,
+        users=users,
+        clock=FixedClock(1234),
+        ids=FixedIds(),
+    )
+
+    from app.application.errors import MatchLocked
+
+    with pytest.raises(MatchLocked):
+        service.create_classic_match("case-1", USER_ID)
+
+    assert repository.matches == {}
 
 
 def test_classic_request_does_not_accept_client_difficulty():

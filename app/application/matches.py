@@ -1,4 +1,5 @@
 import json
+import random
 from typing import Any, Dict, List
 
 from app.application.errors import (
@@ -7,6 +8,7 @@ from app.application.errors import (
     MatchLocked,
     MatchNotFound,
     MatchUnavailable,
+    NoEligibleCase,
     OwnMatch,
     ServiceIntegrationError,
 )
@@ -41,10 +43,10 @@ class MatchService:
         case_id: str,
         user_id: str,
     ) -> Dict[str, Any]:
-        difficulty = self.cases.get_difficulty(case_id)
+        case = self.cases.get_case_summary(case_id)
+        difficulty = case["difficulty"]
         progression = self.users.get_progression(user_id)
-        required_level = {"EASY": 1, "MEDIUM": 5, "HARD": 10}[difficulty]
-        if progression["level"] < required_level:
+        if progression["level"] < case["requiredLevel"]:
             raise MatchLocked
         match_id = self.ids.new_id()
         now = self.clock.now_seconds()
@@ -206,13 +208,14 @@ class MatchService:
 
     def create_versus_match(
         self,
-        case_id: str,
         user_id: str,
     ) -> Dict[str, Any]:
+        if not self._eligible_versus_cases([user_id]):
+            raise NoEligibleCase
         match_id = self.ids.new_id()
         match_data = {
             "matchId": match_id,
-            "caseId": case_id,
+            "caseId": None,
             "status": "WAITING",
             "player1": user_id,
             "player2": None,
@@ -221,7 +224,7 @@ class MatchService:
         }
         self.repository.save_match(match_id, match_data)
         self.repository.add_open_match(match_id)
-        return {"matchId": match_id, "caseId": case_id, "status": "WAITING", "player1": user_id}
+        return {"matchId": match_id, "caseId": None, "status": "WAITING", "player1": user_id}
 
     def list_open_matches(self) -> List[Dict[str, Any]]:
         matches = []
@@ -247,14 +250,22 @@ class MatchService:
         if match_data["player1"] == user_id:
             raise OwnMatch
 
+        eligible_cases = self._eligible_versus_cases(
+            [match_data["player1"], user_id]
+        )
+        if not eligible_cases:
+            raise NoEligibleCase
+        case = random.choice(eligible_cases)
         match_data["player2"] = user_id
+        match_data["caseId"] = case["id"]
         match_data["status"] = "IN_PROGRESS"
         match_data["startedAt"] = self.clock.now_seconds()
-        self.repository.save_match(match_id, match_data)
+        if not self.repository.complete_match(match_id, "WAITING", match_data):
+            raise MatchUnavailable
         self.repository.remove_open_match(match_id)
         return {
             "matchId": match_id,
-            "caseId": match_data["caseId"],
+            "caseId": case["id"],
             "status": "IN_PROGRESS",
             "player1": match_data["player1"],
             "player2": user_id,
@@ -290,9 +301,25 @@ class MatchService:
             raise MatchUnavailable
 
         return {
+            "caseId": match_data["caseId"],
             "me": self.repository.get_progress(match_id, me_id_string),
             "rival": self.repository.get_progress(match_id, rival_id),
         }
+
+    def _eligible_versus_cases(self, user_ids: List[str]) -> List[Dict[str, Any]]:
+        progressions = [self.users.get_progression(user_id) for user_id in user_ids]
+        max_required_level = min(progression["level"] for progression in progressions)
+        solved_case_ids = {
+            case_id
+            for user_id in user_ids
+            for case_id in self.users.get_solved_case_ids(user_id)
+        }
+        return [
+            case
+            for case in self.cases.list_case_summaries()
+            if case["requiredLevel"] <= max_required_level
+            and case["id"] not in solved_case_ids
+        ]
 
     def submit_versus_solution(
         self,

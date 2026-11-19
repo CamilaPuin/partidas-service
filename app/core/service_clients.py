@@ -228,6 +228,58 @@ def get_case_difficulty(case_id: str) -> str:
     return difficulty
 
 
+def get_case_summary(case_id: str) -> Dict[str, Any]:
+    try:
+        response = get_service_json(
+            "CASOS-SERVICE",
+            f"/cases/{quote(case_id, safe='')}",
+        )
+    except CaseNotFound:
+        raise
+    except ServiceIntegrationError as exc:
+        raise CasesServiceError(
+            f"CASOS-SERVICE no pudo recuperar el caso: {exc}"
+        ) from exc
+
+    return _validate_case_summary(response)
+
+
+def list_case_summaries() -> list[Dict[str, Any]]:
+    try:
+        response = get_service_json("CASOS-SERVICE", "/cases")
+    except ServiceIntegrationError as exc:
+        raise CasesServiceError(
+            f"CASOS-SERVICE no pudo recuperar el catálogo: {exc}"
+        ) from exc
+
+    if not isinstance(response, list):
+        raise CasesServiceError("CASOS-SERVICE devolvió un catálogo inválido")
+    summaries = [_validate_case_summary(case) for case in response]
+    ids = [case["id"] for case in summaries]
+    if len(ids) != len(set(ids)):
+        raise CasesServiceError("CASOS-SERVICE devolvió casos duplicados")
+    return summaries
+
+
+def _validate_case_summary(response: Any) -> Dict[str, Any]:
+    case_id = response.get("id") if isinstance(response, dict) else None
+    difficulty = response.get("difficulty") if isinstance(response, dict) else None
+    if (
+        not isinstance(case_id, str)
+        or not case_id.strip()
+        or not isinstance(difficulty, str)
+        or difficulty not in {"EASY", "MEDIUM", "HARD"}
+        or type(response.get("requiredLevel")) is not int
+        or response["requiredLevel"] < 1
+    ):
+        raise CasesServiceError("CASOS-SERVICE devolvió un caso inválido")
+    return {
+        "id": case_id.strip(),
+        "difficulty": difficulty,
+        "requiredLevel": response["requiredLevel"],
+    }
+
+
 def get_user_progression(user_id: str) -> Dict[str, Any]:
     try:
         response = get_service_json(
@@ -246,6 +298,27 @@ def get_user_progression(user_id: str) -> Dict[str, Any]:
     ):
         raise ServiceIntegrationError(
             "USUARIOS-SERVICE devolvió una progresión inválida"
+        )
+    return response
+
+
+def get_solved_case_ids(user_id: str) -> list[str]:
+    try:
+        response = get_service_json(
+            "USUARIOS-SERVICE",
+            f"/users/{quote(user_id, safe='')}/solved-cases",
+        )
+    except ServiceIntegrationError as exc:
+        raise ServiceIntegrationError(
+            f"USUARIOS-SERVICE no pudo recuperar los casos resueltos: {exc}"
+        ) from exc
+    if (
+        not isinstance(response, list)
+        or any(not isinstance(case_id, str) or not case_id.strip() for case_id in response)
+        or len(response) != len(set(response))
+    ):
+        raise ServiceIntegrationError(
+            "USUARIOS-SERVICE devolvió casos resueltos inválidos"
         )
     return response
 
