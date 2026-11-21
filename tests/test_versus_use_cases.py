@@ -67,6 +67,9 @@ class FakeUsers:
         if self.error:
             raise self.error
 
+    def get_display_name(self, user_id):
+        return f"Detective {user_id}"
+
 
 class FixedClock:
     def now_seconds(self):
@@ -92,10 +95,16 @@ def test_versus_validates_and_enqueues_one_event_for_both_players():
 
     result = service.submit_versus_solution("m-1", "user-1", positions)
 
-    assert result == {
-        "winnerId": "user-1", "matchId": "m-1", "xpDelta": 100,
-        "sagaStatus": "PENDING",
-    }
+    assert result["winnerId"] == "user-1"
+    assert result["matchId"] == "m-1"
+    assert result["xpDelta"] == 100
+    assert result["sagaStatus"] == "PENDING"
+    assert result["timeSeconds"] == 40
+    assert result["solution"] == positions
+    assert result["playerTimes"] == [
+        {"userId": "user-1", "displayName": None, "timeSeconds": 40},
+        {"userId": "user-2", "displayName": None, "timeSeconds": None},
+    ]
     assert cases.calls == [("case-1", positions)]
     assert users.calls == []
     assert store.match["status"] == "FINISHED"

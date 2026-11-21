@@ -342,6 +342,20 @@ class MatchRepository:
             "updatedAt": match.get("sagaUpdatedAt"),
             "correlationId": match.get("correlationId"),
             "results": match.get("sagaResults", []),
+            "caseId": match.get("caseId"),
+            "winnerId": match.get("winnerId"),
+            "winnerName": (
+                match.get("player1Name")
+                if match.get("winnerId") == match.get("player1")
+                else match.get("player2Name")
+            ),
+            "player1": match.get("player1"),
+            "player2": match.get("player2"),
+            "player1Name": match.get("player1Name"),
+            "player2Name": match.get("player2Name"),
+            "timeSeconds": match.get("timeSeconds"),
+            "playerTimes": match.get("playerTimes", []),
+            "solution": match.get("solution"),
         }
 
     def recover_inflight_match_events(self) -> int:

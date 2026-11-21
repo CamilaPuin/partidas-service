@@ -40,6 +40,11 @@ class MatchDTO(BaseModel):
     player2: Optional[str] = None
 
 
+class VersusMatchDTO(MatchDTO):
+    player1Name: Optional[str] = None
+    player2Name: Optional[str] = None
+
+
 class PositionDTO(BaseModel):
     characterId: Annotated[StrictStr, StringConstraints(strip_whitespace=True, min_length=1)]
     x: Annotated[StrictInt, Field(ge=0)]
@@ -93,6 +98,15 @@ class VersusResultDTO(BaseModel):
     matchId: str
     xpDelta: int
     sagaStatus: str = "PENDING"
+    caseId: Optional[str] = None
+    player1: Optional[str] = None
+    player2: Optional[str] = None
+    player1Name: Optional[str] = None
+    player2Name: Optional[str] = None
+    winnerName: Optional[str] = None
+    timeSeconds: Optional[int] = None
+    playerTimes: list[dict] = Field(default_factory=list)
+    solution: Optional[list[dict]] = None
 
 
 class SagaStatusDTO(BaseModel):
@@ -101,6 +115,16 @@ class SagaStatusDTO(BaseModel):
     updatedAt: Optional[int] = None
     correlationId: Optional[str] = None
     results: list[dict] = Field(default_factory=list)
+    caseId: Optional[str] = None
+    winnerId: Optional[str] = None
+    winnerName: Optional[str] = None
+    player1: Optional[str] = None
+    player2: Optional[str] = None
+    player1Name: Optional[str] = None
+    player2Name: Optional[str] = None
+    timeSeconds: Optional[int] = None
+    playerTimes: list[dict] = Field(default_factory=list)
+    solution: Optional[list[dict]] = None
 
 
 class ProgressRequest(BaseModel):

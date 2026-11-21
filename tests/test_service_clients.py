@@ -168,6 +168,30 @@ def test_get_solved_case_ids_uses_internal_users_request(monkeypatch):
     assert seen["request"].get_header("X-internal-token") == "internal-test"
 
 
+def test_get_user_display_name_uses_internal_users_request(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "internal-test")
+    monkeypatch.setattr(
+        service_clients,
+        "_service_url",
+        lambda _name: "http://usuarios-service:8081",
+    )
+    seen = {}
+
+    class DisplayNameResponse(FakeResponse):
+        def read(self):
+            return b'{"displayName":"Detective"}'
+
+    def fake_urlopen(request, timeout):
+        seen["request"] = request
+        return DisplayNameResponse()
+
+    monkeypatch.setattr(service_clients, "urlopen", fake_urlopen)
+
+    assert service_clients.get_user_display_name("user/1") == "Detective"
+    assert seen["request"].full_url.endswith("/users/user%2F1/display-name")
+    assert seen["request"].get_header("X-internal-token") == "internal-test"
+
+
 def test_register_user_result_uses_external_id_and_internal_token(monkeypatch):
     external_id = "603fba8d-bb2c-4994-bc27-e9c40e30fec8"
     monkeypatch.setenv("INTERNAL_API_TOKEN", "internal-test")

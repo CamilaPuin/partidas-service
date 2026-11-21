@@ -37,6 +37,7 @@ from app.schemas.matches import (
     SolutionDTO,
     TimedMatchRequest,
     VersusMatchRequest,
+    VersusMatchDTO,
     VersusResultDTO,
 )
 
@@ -244,7 +245,7 @@ def finish_timed_match(
 
 @router.post(
     "/matches/versus",
-    response_model=MatchDTO,
+    response_model=VersusMatchDTO,
     status_code=200,
     summary="Crear partida versus",
     responses={
@@ -272,9 +273,34 @@ def create_versus_match(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@router.delete(
+    "/matches/versus/{match_id}",
+    status_code=200,
+    summary="Cancelar sala versus",
+    responses={
+        200: {"description": "Sala cancelada"},
+        403: {"description": "Solo el creador puede cancelar la sala"},
+        404: {"description": "Partida no encontrada"},
+        409: {"description": "La sala ya no está esperando"},
+    },
+)
+def cancel_versus_match(
+    match_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        return match_service.cancel_versus_match(match_id, user_id)
+    except MatchNotFound as exc:
+        raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
+    except OwnMatch as exc:
+        raise HTTPException(status_code=403, detail="No puedes cancelar esta sala") from exc
+    except MatchUnavailable as exc:
+        raise HTTPException(status_code=409, detail="La sala ya no está esperando") from exc
+
+
 @router.get(
     "/matches/versus/open",
-    response_model=List[MatchDTO],
+    response_model=List[VersusMatchDTO],
     status_code=200,
     summary="Listar partidas versus disponibles",
     responses={200: {"description": "Partidas disponibles"}},
@@ -285,7 +311,7 @@ def list_open_matches(_user_id: str = Depends(get_current_user_id)):
 
 @router.post(
     "/matches/versus/{match_id}/join",
-    response_model=MatchDTO,
+    response_model=VersusMatchDTO,
     status_code=200,
     summary="Unirse a una partida versus",
     responses={

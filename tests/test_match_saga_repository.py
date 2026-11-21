@@ -125,5 +125,15 @@ def test_match_saga_status_does_not_expose_the_outbox_payload():
         "updatedAt": None,
         "correlationId": "corr-44",
         "results": [],
+        "caseId": None,
+        "winnerId": None,
+        "winnerName": None,
+        "player1": None,
+        "player2": None,
+        "player1Name": None,
+        "player2Name": None,
+        "timeSeconds": None,
+        "playerTimes": [],
+        "solution": None,
     }
     assert "secret" not in json.dumps(status)

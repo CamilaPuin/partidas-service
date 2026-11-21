@@ -1,6 +1,6 @@
 import pytest
 
-from app.application.errors import NoEligibleCase
+from app.application.errors import NoEligibleCase, OwnMatch
 from app.application.matches import MatchService
 
 
@@ -63,6 +63,9 @@ class FakeUsers:
     def get_solved_case_ids(self, user_id):
         return self.solved.get(user_id, [])
 
+    def get_display_name(self, user_id):
+        return "Host Detective" if user_id == "host" else "Guest Detective"
+
 
 class FixedClock:
     def now_seconds(self):
@@ -91,6 +94,7 @@ def test_versus_assigns_case_only_after_both_players_join_and_excludes_both_hist
 
     assert created["caseId"] is None
     assert created["status"] == "WAITING"
+    assert created["player1Name"] == "Host Detective"
     assert store.open_matches == {"match-1"}
 
     joined = service.join_versus_match("match-1", "guest")
@@ -99,6 +103,7 @@ def test_versus_assigns_case_only_after_both_players_join_and_excludes_both_hist
     assert joined["status"] == "IN_PROGRESS"
     assert store.matches["match-1"]["caseId"] == "medium-a"
     assert store.matches["match-1"]["player2"] == "guest"
+    assert joined["player2Name"] == "Guest Detective"
     assert store.open_matches == set()
 
 
@@ -135,8 +140,31 @@ def test_versus_progress_includes_server_assigned_case():
 
     progress = service.get_versus_progress("match-1", "host")
 
-    assert progress == {
-        "caseId": store.matches["match-1"]["caseId"],
-        "me": 0.0,
-        "rival": 0.0,
+    assert progress["caseId"] == store.matches["match-1"]["caseId"]
+    assert progress["me"] == 0.0
+    assert progress["rival"] == 0.0
+    assert progress["opponentName"] == "Guest Detective"
+    assert progress["startedAt"] == 1234
+
+
+def test_creator_can_cancel_waiting_room_and_it_is_removed_from_open_matches():
+    service, store = build_service()
+    service.create_versus_match("host")
+
+    assert service.cancel_versus_match("match-1", "host") == {
+        "matchId": "match-1",
+        "status": "CANCELLED",
     }
+    assert store.matches["match-1"]["status"] == "CANCELLED"
+    assert store.open_matches == set()
+
+
+def test_only_creator_can_cancel_waiting_room():
+    service, store = build_service()
+    service.create_versus_match("host")
+
+    with pytest.raises(OwnMatch):
+        service.cancel_versus_match("match-1", "guest")
+
+    assert store.matches["match-1"]["status"] == "WAITING"
+    assert store.open_matches == {"match-1"}
