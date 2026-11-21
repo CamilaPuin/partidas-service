@@ -218,13 +218,21 @@ class MatchService:
             "caseId": None,
             "status": "WAITING",
             "player1": user_id,
+            "player1Name": self.users.get_display_name(user_id),
             "player2": None,
+            "player2Name": None,
             "winnerId": None,
             "mode": "VERSUS",
         }
         self.repository.save_match(match_id, match_data)
         self.repository.add_open_match(match_id)
-        return {"matchId": match_id, "caseId": None, "status": "WAITING", "player1": user_id}
+        return {
+            "matchId": match_id,
+            "caseId": None,
+            "status": "WAITING",
+            "player1": user_id,
+            "player1Name": match_data["player1Name"],
+        }
 
     def list_open_matches(self) -> List[Dict[str, Any]]:
         matches = []
@@ -237,6 +245,7 @@ class MatchService:
                         "caseId": data["caseId"],
                         "status": data["status"],
                         "player1": data.get("player1"),
+                        "player1Name": data.get("player1Name"),
                     }
                 )
         return matches
@@ -256,7 +265,9 @@ class MatchService:
         if not eligible_cases:
             raise NoEligibleCase
         case = random.choice(eligible_cases)
+        player2_name = self.users.get_display_name(user_id)
         match_data["player2"] = user_id
+        match_data["player2Name"] = player2_name
         match_data["caseId"] = case["id"]
         match_data["status"] = "IN_PROGRESS"
         match_data["startedAt"] = self.clock.now_seconds()
@@ -269,7 +280,25 @@ class MatchService:
             "status": "IN_PROGRESS",
             "player1": match_data["player1"],
             "player2": user_id,
+            "player1Name": match_data.get("player1Name"),
+            "player2Name": player2_name,
+            "startedAt": match_data["startedAt"],
         }
+
+    def cancel_versus_match(self, match_id: str, user_id: str) -> Dict[str, Any]:
+        match_data = self.repository.get_match(match_id)
+        if not match_data:
+            raise MatchNotFound
+        if match_data.get("mode") != "VERSUS" or match_data.get("player1") != user_id:
+            raise OwnMatch
+        if match_data.get("status") != "WAITING":
+            raise MatchUnavailable
+        match_data["status"] = "CANCELLED"
+        match_data["cancelledAt"] = self.clock.now_seconds()
+        if not self.repository.complete_match(match_id, "WAITING", match_data):
+            raise MatchUnavailable
+        self.repository.remove_open_match(match_id)
+        return {"matchId": match_id, "status": "CANCELLED"}
 
     def report_progress(
         self,
@@ -304,6 +333,16 @@ class MatchService:
             "caseId": match_data["caseId"],
             "me": self.repository.get_progress(match_id, me_id_string),
             "rival": self.repository.get_progress(match_id, rival_id),
+            "opponentName": (
+                match_data.get("player2Name")
+                if match_data.get("player1") == me_id_string
+                else match_data.get("player1Name")
+            ),
+            "player1": match_data.get("player1"),
+            "player2": match_data.get("player2"),
+            "player1Name": match_data.get("player1Name"),
+            "player2Name": match_data.get("player2Name"),
+            "startedAt": match_data.get("startedAt"),
         }
 
     def _eligible_versus_cases(self, user_ids: List[str]) -> List[Dict[str, Any]]:
@@ -358,11 +397,31 @@ class MatchService:
         event = match_finished_event(
             match_id, match_data["caseId"], "VERSUS", time_taken, results
         )
+        solution = [
+            position.model_dump() if hasattr(position, "model_dump") else dict(position)
+            for position in positions
+        ]
+        player_times = [
+            {
+                "userId": player,
+                "displayName": (
+                    match_data.get("player1Name")
+                    if player == match_data.get("player1")
+                    else match_data.get("player2Name")
+                ),
+                "timeSeconds": time_taken if player == winner_id else None,
+            }
+            for player in players
+            if player
+        ]
         match_data.update({
             "sagaStatus": "PENDING",
             "sagaEventId": event["eventId"],
             "correlationId": event["correlationId"],
             "finishedAt": now,
+            "timeSeconds": time_taken,
+            "solution": solution,
+            "playerTimes": player_times,
             "matchFinishedEvent": event,
         })
         if not self.repository.complete_match(
@@ -377,6 +436,19 @@ class MatchService:
             "matchId": match_id,
             "xpDelta": 100,
             "sagaStatus": "PENDING",
+            "caseId": match_data["caseId"],
+            "player1": match_data.get("player1"),
+            "player2": match_data.get("player2"),
+            "player1Name": match_data.get("player1Name"),
+            "player2Name": match_data.get("player2Name"),
+            "winnerName": (
+                match_data.get("player1Name")
+                if winner_id == match_data.get("player1")
+                else match_data.get("player2Name")
+            ),
+            "timeSeconds": time_taken,
+            "playerTimes": player_times,
+            "solution": solution,
         }
 
     def get_ranking(self, limit: int) -> List[Dict[str, Any]]:

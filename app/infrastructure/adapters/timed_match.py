@@ -6,6 +6,7 @@ from app.core.service_clients import (
     get_case_summary,
     get_case_difficulty,
     get_solved_case_ids,
+    get_user_display_name,
     list_case_summaries,
     get_user_progression,
     register_user_result,
@@ -44,6 +45,9 @@ class UsersHttpAdapter:
 
     def get_solved_case_ids(self, user_id: str) -> list[str]:
         return get_solved_case_ids(user_id)
+
+    def get_display_name(self, user_id: str) -> str:
+        return get_user_display_name(user_id)
 
     def register(
         self,

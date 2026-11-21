@@ -323,6 +323,24 @@ def get_solved_case_ids(user_id: str) -> list[str]:
     return response
 
 
+def get_user_display_name(user_id: str) -> str:
+    try:
+        response = get_service_json(
+            "USUARIOS-SERVICE",
+            f"/users/{quote(user_id, safe='')}/display-name",
+        )
+    except ServiceIntegrationError as exc:
+        raise ServiceIntegrationError(
+            f"USUARIOS-SERVICE no pudo recuperar el nombre público: {exc}"
+        ) from exc
+    display_name = response.get("displayName") if isinstance(response, dict) else None
+    if not isinstance(display_name, str) or not display_name.strip():
+        raise ServiceIntegrationError(
+            "USUARIOS-SERVICE devolvió un nombre público inválido"
+        )
+    return display_name.strip()
+
+
 def register_user_result(
     user_id: str,
     match_id: str,

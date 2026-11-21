@@ -81,3 +81,19 @@ def test_versus_submission_rejects_duplicate_character_ids_before_use_case(
 
     assert response.status_code == 422
     assert called == []
+
+
+def test_versus_creator_can_cancel_waiting_room(client, monkeypatch):
+    monkeypatch.setattr(
+        matches.match_service,
+        "cancel_versus_match",
+        lambda match_id, user_id: {
+            "matchId": match_id,
+            "status": "CANCELLED",
+        },
+    )
+
+    response = client.delete("/matches/versus/match-1", headers=HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == {"matchId": "match-1", "status": "CANCELLED"}

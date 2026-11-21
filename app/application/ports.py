@@ -106,6 +106,8 @@ class UserProgressionProvider(Protocol):
 
     def get_solved_case_ids(self, user_id: str) -> List[str]: ...
 
+    def get_display_name(self, user_id: str) -> str: ...
+
 
 class UserResultRecorder(Protocol):
     def register(
