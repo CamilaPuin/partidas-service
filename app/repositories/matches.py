@@ -1014,6 +1014,12 @@ class MatchRepository:
     def save_progress(self, match_id: str, user_id: str, progress: float) -> None:
         self.client.hset(f"match:{match_id}:progress", user_id, progress)
 
+    def publish_progress(self, match_id: str, user_id: str, progress: float) -> None:
+        self.client.publish(
+            f"match:{match_id}:progress:events",
+            json.dumps({"userId": user_id, "progress": progress}),
+        )
+
     def get_progress(self, match_id: str, user_id: str) -> float:
         return float(self.client.hget(f"match:{match_id}:progress", user_id) or 0.0)
 

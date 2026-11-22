@@ -97,3 +97,45 @@ def test_versus_creator_can_cancel_waiting_room(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"matchId": "match-1", "status": "CANCELLED"}
+
+
+def test_versus_progress_websocket_streams_authorized_match_snapshots(client, monkeypatch):
+    snapshot = {
+        "caseId": "case-1",
+        "status": "IN_PROGRESS",
+        "me": 0.2,
+        "rival": 0.6,
+        "opponentName": "Rival",
+    }
+
+    class FakePubSub:
+        def __init__(self):
+            self.notifications = 1
+
+        def subscribe(self, _channel):
+            pass
+
+        def get_message(self, **_kwargs):
+            if self.notifications:
+                self.notifications -= 1
+                return {"type": "message", "data": "progress"}
+            raise RuntimeError("stop fake stream after one published update")
+
+        def unsubscribe(self, _channel):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(matches.match_service, "get_versus_progress", lambda *_args: snapshot)
+    monkeypatch.setattr(matches.redis_client, "pubsub", FakePubSub)
+
+    with client.websocket_connect(
+        "/matches/versus/match-1/progress/ws",
+        headers=HEADERS,
+    ) as websocket:
+        initial = websocket.receive_json()
+        update = websocket.receive_json()
+
+    assert initial == {"event": "snapshot", "progress": snapshot}
+    assert update == {"event": "progress", "progress": snapshot}

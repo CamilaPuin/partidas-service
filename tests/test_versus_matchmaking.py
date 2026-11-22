@@ -16,6 +16,7 @@ class FakeStore:
     def __init__(self):
         self.matches = {}
         self.open_matches = set()
+        self.published_progress = []
 
     def get_match(self, match_id):
         match = self.matches.get(match_id)
@@ -42,6 +43,9 @@ class FakeStore:
 
     def save_progress(self, *_args):
         pass
+
+    def publish_progress(self, match_id, user_id, progress):
+        self.published_progress.append((match_id, user_id, progress))
 
     def get_progress(self, *_args):
         return 0.0
@@ -145,6 +149,19 @@ def test_versus_progress_includes_server_assigned_case():
     assert progress["rival"] == 0.0
     assert progress["opponentName"] == "Guest Detective"
     assert progress["startedAt"] == 1234
+
+
+def test_versus_progress_is_persisted_and_published_only_by_active_participants():
+    service, store = build_service()
+    service.create_versus_match("host")
+    service.join_versus_match("match-1", "guest")
+
+    assert service.report_progress("match-1", "host", 0.4) == {"ok": True, "progress": 0.4}
+    assert store.published_progress == [("match-1", "host", 0.4)]
+
+    with pytest.raises(OwnMatch):
+        service.report_progress("match-1", "stranger", 0.8)
+    assert store.published_progress == [("match-1", "host", 0.4)]
 
 
 def test_creator_can_cancel_waiting_room_and_it_is_removed_from_open_matches():

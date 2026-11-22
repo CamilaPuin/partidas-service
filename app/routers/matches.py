@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+import asyncio
+import os
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket
 from typing import List
 import re
 
@@ -17,6 +19,7 @@ from app.application.errors import (
 from app.application.matches import MatchService
 from app.application.timed_matches import CreateTimedMatch, FinishTimedMatch
 from app.core.redis_client import redis_client
+from app.core.gateway_security import has_valid_gateway_secret
 from app.infrastructure.adapters.timed_match import (
     CasesHttpAdapter,
     SystemClock,
@@ -369,7 +372,14 @@ def report_progress(
     request: ProgressRequest,
     user_id: str = Depends(get_current_user_id),
 ):
-    return match_service.report_progress(match_id, user_id, request.progress)
+    try:
+        return match_service.report_progress(match_id, user_id, request.progress)
+    except MatchNotFound as exc:
+        raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
+    except OwnMatch as exc:
+        raise HTTPException(status_code=403, detail="No perteneces a esta partida") from exc
+    except MatchUnavailable as exc:
+        raise HTTPException(status_code=400, detail="La partida no está en curso") from exc
 
 
 @router.get(
@@ -401,6 +411,72 @@ def get_versus_progress(
         ) from exc
 
 
+@router.websocket("/matches/versus/{match_id}/progress/ws")
+async def versus_progress_stream(websocket: WebSocket, match_id: str):
+    """Authenticated push channel for progress updates to the two match players."""
+    user_id = websocket.headers.get("X-User-Id")
+    expected_secret = os.getenv("GATEWAY_SECRET", "")
+    received_secret = websocket.headers.get("X-Gateway-Secret")
+    if (
+        not expected_secret
+        or not has_valid_gateway_secret(received_secret, expected_secret)
+        or user_id is None
+        or not EXTERNAL_ID_PATTERN.fullmatch(user_id)
+    ):
+        await websocket.close(code=1008, reason="No autorizado")
+        return
+
+    try:
+        snapshot = match_service.get_versus_progress(match_id, user_id)
+    except (MatchNotFound, OwnMatch, MatchUnavailable):
+        await websocket.close(code=1008, reason="Partida no disponible")
+        return
+
+    pubsub = redis_client.pubsub()
+    try:
+        pubsub.subscribe(f"match:{match_id}:progress:events")
+        await websocket.accept()
+        is_finished = snapshot.get("status") == "FINISHED"
+        await websocket.send_json({
+            "event": "finished" if is_finished else "snapshot",
+            "progress": snapshot,
+        })
+        if is_finished:
+            await websocket.close(code=1000)
+            return
+
+        heartbeat_loops = 0
+        while True:
+            message = await asyncio.to_thread(
+                pubsub.get_message,
+                ignore_subscribe_messages=True,
+                timeout=1.0,
+            )
+            if message and message.get("type") == "message":
+                snapshot = match_service.get_versus_progress(match_id, user_id)
+                is_finished = snapshot.get("status") == "FINISHED"
+                await websocket.send_json({
+                    "event": "finished" if is_finished else "progress",
+                    "progress": snapshot,
+                })
+                if is_finished:
+                    await websocket.close(code=1000)
+                    return
+            heartbeat_loops += 1
+            if heartbeat_loops >= 20:
+                await websocket.send_json({"event": "heartbeat"})
+                heartbeat_loops = 0
+    except Exception:
+        try:
+            await websocket.close(code=1011, reason="Canal de progreso interrumpido")
+        except Exception:
+            pass
+    finally:
+        try:
+            pubsub.unsubscribe(f"match:{match_id}:progress:events")
+            pubsub.close()
+        except Exception:
+            pass
 @router.post(
     "/matches/versus/{match_id}/submit",
     response_model=VersusResultDTO,

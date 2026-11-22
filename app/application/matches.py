@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 from typing import Any, Dict, List
 
@@ -20,6 +21,8 @@ from app.application.ports import (
     MatchStore,
     UsersGateway,
 )
+
+logger = logging.getLogger(__name__)
 
 class MatchService:
     """Application use cases for CLASSIC and VERSUS match flows."""
@@ -306,8 +309,22 @@ class MatchService:
         user_id: str,
         progress: float,
     ) -> dict:
+        match_data = self.repository.get_match(match_id)
+        if not match_data:
+            raise MatchNotFound
+        if user_id not in (match_data.get("player1"), match_data.get("player2")):
+            raise OwnMatch
+        if match_data.get("mode") != "VERSUS" or match_data.get("status") != "IN_PROGRESS":
+            raise MatchUnavailable
         self.repository.save_progress(match_id, user_id, progress)
-        return {"ok": True}
+        self._publish_progress(match_id, user_id, progress)
+        return {"ok": True, "progress": progress}
+
+    def _publish_progress(self, match_id: str, user_id: str, progress: float) -> None:
+        try:
+            self.repository.publish_progress(match_id, user_id, progress)
+        except Exception:
+            logger.warning("Could not publish versus progress matchId=%s", match_id)
 
     def get_versus_progress(
         self,
@@ -331,6 +348,8 @@ class MatchService:
 
         return {
             "caseId": match_data["caseId"],
+            "status": match_data.get("status"),
+            "userId": me_id_string,
             "me": self.repository.get_progress(match_id, me_id_string),
             "rival": self.repository.get_progress(match_id, rival_id),
             "opponentName": (
@@ -343,6 +362,17 @@ class MatchService:
             "player1Name": match_data.get("player1Name"),
             "player2Name": match_data.get("player2Name"),
             "startedAt": match_data.get("startedAt"),
+            "winnerId": match_data.get("winnerId"),
+            "winnerName": (
+                match_data.get("player1Name")
+                if match_data.get("winnerId") == match_data.get("player1")
+                else match_data.get("player2Name")
+            ),
+            "xpDelta": 100 if match_data.get("winnerId") == me_id_string else 0,
+            "sagaStatus": match_data.get("sagaStatus"),
+            "timeSeconds": match_data.get("timeSeconds"),
+            "playerTimes": match_data.get("playerTimes", []),
+            "solution": match_data.get("solution", []),
         }
 
     def _eligible_versus_cases(self, user_ids: List[str]) -> List[Dict[str, Any]]:
@@ -430,6 +460,7 @@ class MatchService:
             match_data,
         ):
             raise MatchUnavailable
+        self._publish_progress(match_id, player_id, 1.0)
 
         return {
             "winnerId": winner_id,

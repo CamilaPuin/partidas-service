@@ -23,6 +23,7 @@ class FakeStore:
         self.history = []
         self.scores = []
         self.outbox = []
+        self.progress_events = []
 
     def get_match(self, match_id):
         self.events.append(("get", match_id))
@@ -42,6 +43,9 @@ class FakeStore:
 
     def save_user_history(self, user_id, entry):
         self.history.append((user_id, dict(entry)))
+
+    def publish_progress(self, match_id, user_id, progress):
+        self.progress_events.append((match_id, user_id, progress))
 
 
 class FakeCases:
