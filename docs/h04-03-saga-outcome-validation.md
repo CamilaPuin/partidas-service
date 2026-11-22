@@ -22,14 +22,13 @@ outcomes inválidos, carreras o tipos de clave incompatibles. Una confirmación
 repetida con el mismo contenido no vuelve a aplicar recompensas; una distinta
 después de confirmar devuelve `conflict`.
 
-## Manejo de offsets Kafka pendiente (H04-04)
+## Manejo de offsets Kafka (H04-04)
 
-El consumidor actual registra con warning los resultados `invalid`, `stale` y
-`conflict`, y después confirma el offset. Los mensajes JSON malformados y las
-excepciones de Redis no siguen ese camino normal de confirmación. Por tanto,
-un evento estructuralmente válido pero incompleto/contradictorio se descarta
-tras el warning; definir DLQ, retry y política de offsets corresponde a H04-04
-y queda pendiente.
+La política vigente para `invalid`, `stale`, `conflict`, Redis y offsets está
+documentada en [`h04-04-kafka-outcome-consumer.md`](h04-04-kafka-outcome-consumer.md).
+Los errores permanentes conservan el payload original en DLQ antes del commit;
+los fallos transitorios mantienen el offset sin confirmar y la idempotencia Lua
+de esta sección protege los replays.
 
 `tests/run_h04_03_isolated.ps1` prepara la validación con Redis real y las
 regresiones HTTP en Linux. Desde la raíz del repositorio, se ejecuta con:
