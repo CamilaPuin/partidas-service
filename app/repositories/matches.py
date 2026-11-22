@@ -9,6 +9,267 @@ import redis
 FINISHED_MATCH_TTL_SECONDS = 30 * 24 * 60 * 60
 MATCH_EVENT_OUTBOX = "outbox:matches.finished.v1"
 MATCH_EVENT_INFLIGHT = "outbox:matches.finished.v1:inflight"
+PENDING_SAGAS = "matches:saga:pending"
+SAGA_RECONCILIATION_DUE = "matches:saga:reconcile:due"
+SAGA_RECONCILIATION_INDEX_READY = "matches:saga:reconcile:index-ready:v1"
+
+
+class SagaReconciliationResponseError(RuntimeError):
+    """Redis returned a malformed response for the saga claim script."""
+
+
+def _decode_saga_claim_response(values: Any) -> tuple[list[tuple[str, str, dict[str, Any]]], list[tuple[str, str]]]:
+    """Decode the nested two-array response returned by _CLAIM_SAGAS_SCRIPT."""
+    if not isinstance(values, (list, tuple)) or len(values) != 2:
+        raise SagaReconciliationResponseError(
+            "Redis saga claim response must contain [claims, outcomes]"
+        )
+    raw_claims, raw_outcomes = values
+    if not isinstance(raw_claims, (list, tuple)) or not isinstance(raw_outcomes, (list, tuple)):
+        raise SagaReconciliationResponseError(
+            "Redis saga claim response claims and outcomes must be arrays"
+        )
+    if len(raw_claims) % 3:
+        raise SagaReconciliationResponseError(
+            f"Redis saga claim response has {len(raw_claims)} claim fields; expected triples"
+        )
+    if len(raw_outcomes) % 2:
+        raise SagaReconciliationResponseError(
+            f"Redis saga claim response has {len(raw_outcomes)} outcome fields; expected pairs"
+        )
+
+    def text_field(value: Any, field: str) -> str:
+        if isinstance(value, bytes):
+            try:
+                value = value.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as exc:
+                raise SagaReconciliationResponseError(
+                    f"Redis saga claim response field {field} is not valid UTF-8"
+                ) from exc
+        if not isinstance(value, str) or not value:
+            raise SagaReconciliationResponseError(
+                f"Redis saga claim response field {field} must be a non-empty string"
+            )
+        return value
+
+    claims: list[tuple[str, str, dict[str, Any]]] = []
+    for offset in range(0, len(raw_claims), 3):
+        match_id = text_field(raw_claims[offset], "claim.match_id")
+        token = text_field(raw_claims[offset + 1], "claim.lease_token")
+        raw_event = text_field(raw_claims[offset + 2], "claim.event")
+        try:
+            event = json.loads(raw_event)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise SagaReconciliationResponseError(
+                f"Redis saga claim response contains invalid event JSON for {match_id}"
+            ) from exc
+        if not isinstance(event, dict):
+            raise SagaReconciliationResponseError(
+                f"Redis saga claim response event for {match_id} must be an object"
+            )
+        claims.append((match_id, token, event))
+
+    valid_outcomes = {
+        "stale", "unrecoverable", "already_queued", "exhausted",
+        "lease_expired", "leased",
+    }
+    outcomes: list[tuple[str, str]] = []
+    for offset in range(0, len(raw_outcomes), 2):
+        match_id = text_field(raw_outcomes[offset], "outcome.match_id")
+        outcome = text_field(raw_outcomes[offset + 1], "outcome.result")
+        if outcome not in valid_outcomes:
+            raise SagaReconciliationResponseError(
+                f"Redis saga claim response has unknown outcome {outcome!r}"
+            )
+        outcomes.append((match_id, outcome))
+    return claims, outcomes
+
+
+_CLAIM_SAGAS_SCRIPT = """
+local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
+local claimed = {}
+local outcomes = {}
+local function valid_event(match, event, match_id)
+    local payload = type(event) == 'table' and event.payload or nil
+    local expected_count = match.mode == 'VERSUS' and 2 or 1
+    if match.matchId ~= match_id or match.status ~= 'FINISHED'
+        or (match.mode ~= 'CLASSIC' and match.mode ~= 'TIMED' and match.mode ~= 'VERSUS')
+        or type(match.caseId) ~= 'string' or #match.caseId == 0
+        or type(match.sagaEventId) ~= 'string' or #match.sagaEventId == 0
+        or type(match.correlationId) ~= 'string' or #match.correlationId == 0
+        or type(event) ~= 'table' or event.eventId ~= match.sagaEventId
+        or type(event.occurredAt) ~= 'string' or event.correlationId ~= match.correlationId
+        or type(payload) ~= 'table'
+        or payload.matchId ~= match_id or payload.caseId ~= match.caseId
+        or payload.mode ~= match.mode or type(payload.results) ~= 'table'
+        or type(payload.timeSeconds) ~= 'number' or payload.timeSeconds < 0
+        or #payload.results ~= expected_count then return false end
+    for index, result in ipairs(payload.results) do
+        local participant = index == 1 and match.player1 or match.player2
+        if type(participant) ~= 'string' or #participant == 0
+            or type(result) ~= 'table' or result.userId ~= participant
+            or type(result.won) ~= 'boolean'
+            or (match.mode == 'CLASSIC' and (
+                type(result.difficulty) ~= 'string' or #result.difficulty == 0
+                or result.xpDelta ~= cjson.null
+            ))
+            or (match.mode ~= 'CLASSIC' and type(result.xpDelta) ~= 'number') then
+            return false
+        end
+    end
+    return true
+end
+local function event_is_queued(event_id)
+    for _, list_key in ipairs({'outbox:matches.finished.v1', 'outbox:matches.finished.v1:inflight'}) do
+        local recent = redis.call('LRANGE', list_key, 0, 199)
+        for _, queued_raw in ipairs(recent) do
+            local queued_ok, queued_event = pcall(cjson.decode, queued_raw)
+            if queued_ok and type(queued_event) == 'table' and queued_event.eventId == event_id then
+                return true
+            end
+        end
+    end
+    return false
+end
+for _, match_id in ipairs(ids) do
+    local match_key = 'match:' .. match_id
+    local meta_key = 'matches:saga:reconcile:' .. match_id
+    local lease_key = meta_key .. ':lease'
+    local raw = nil
+    if redis.call('TYPE', match_key).ok == 'string' then raw = redis.call('GET', match_key) end
+    local ok, match = pcall(cjson.decode, raw or '')
+    if not ok or type(match) ~= 'table' or match.sagaStatus ~= 'PENDING' then
+        redis.call('ZREM', KEYS[1], match_id)
+        redis.call('ZREM', KEYS[2], match_id)
+        redis.call('DEL', meta_key, lease_key)
+        table.insert(outcomes, match_id)
+        table.insert(outcomes, 'stale')
+    elseif type(match.finishedAt) ~= 'number' or match.finishedAt <= 0 then
+        redis.call('ZREM', KEYS[1], match_id)
+        redis.call('HSET', meta_key, 'state', 'unrecoverable', 'reason', 'finished_at_missing')
+        redis.call('EXPIRE', meta_key, 2592000)
+        table.insert(outcomes, match_id)
+        table.insert(outcomes, 'unrecoverable')
+    elseif tonumber(match.finishedAt) + tonumber(ARGV[3]) > tonumber(ARGV[1]) then
+        redis.call('ZADD', KEYS[1], tonumber(match.finishedAt) + tonumber(ARGV[3]), match_id)
+    elseif redis.call('EXISTS', lease_key) == 1 then
+        redis.call('ZADD', KEYS[1], tonumber(ARGV[1]) + redis.call('TTL', lease_key), match_id)
+    else
+        local event = match.matchFinishedEvent
+        if not valid_event(match, event, match_id) then
+            redis.call('ZREM', KEYS[1], match_id)
+            redis.call('HSET', meta_key, 'state', 'unrecoverable', 'reason', 'original_event_missing_or_mismatched')
+            redis.call('EXPIRE', meta_key, 2592000)
+            table.insert(outcomes, match_id)
+            table.insert(outcomes, 'unrecoverable')
+        else
+            if event_is_queued(event.eventId) then
+                redis.call('HSET', meta_key, 'state', 'queued')
+                redis.call('EXPIRE', meta_key, 2592000)
+                redis.call('ZADD', KEYS[1], tonumber(ARGV[1]) + tonumber(ARGV[6]), match_id)
+                table.insert(outcomes, match_id)
+                table.insert(outcomes, 'already_queued')
+            else
+                local attempts = redis.call('HINCRBY', meta_key, 'attempts', 1)
+                redis.call('EXPIRE', meta_key, 2592000)
+                if attempts > tonumber(ARGV[4]) then
+                    redis.call('ZREM', KEYS[1], match_id)
+                    redis.call('HSET', meta_key, 'state', 'exhausted')
+                    redis.call('EXPIRE', meta_key, 2592000)
+                    table.insert(outcomes, match_id)
+                    table.insert(outcomes, 'exhausted')
+                else
+                    if redis.call('HGET', meta_key, 'state') == 'leased' then
+                        table.insert(outcomes, match_id)
+                        table.insert(outcomes, 'lease_expired')
+                    end
+                    local token = ARGV[5] .. ':' .. match_id
+                    redis.call('SET', lease_key, token, 'EX', ARGV[6])
+                    redis.call('HSET', meta_key, 'state', 'leased', 'lastAttemptAt', ARGV[1])
+                    redis.call('ZADD', KEYS[1], tonumber(ARGV[1]) + tonumber(ARGV[6]), match_id)
+                    table.insert(claimed, match_id)
+                    table.insert(claimed, token)
+                    table.insert(claimed, cjson.encode(event))
+                    table.insert(outcomes, match_id)
+                    table.insert(outcomes, 'leased')
+                end
+            end
+        end
+    end
+end
+return {claimed, outcomes}
+"""
+
+_REEMIT_SAGA_SCRIPT = """
+local current = nil
+if redis.call('TYPE', KEYS[1]).ok == 'string' then current = redis.call('GET', KEYS[1]) end
+local ok, match = pcall(cjson.decode, current or '')
+if not ok or type(match) ~= 'table' or match.sagaStatus ~= 'PENDING' then
+    redis.call('ZREM', KEYS[4], ARGV[1])
+    redis.call('ZREM', KEYS[5], ARGV[1])
+    redis.call('DEL', KEYS[2], KEYS[3])
+    return 'terminal'
+end
+if redis.call('GET', KEYS[3]) ~= ARGV[2] then return 'fenced' end
+local event = match.matchFinishedEvent
+local payload = type(event) == 'table' and event.payload or nil
+local expected_count = match.mode == 'VERSUS' and 2 or 1
+local valid = type(event) == 'table' and event.eventId == match.sagaEventId
+    and match.matchId == ARGV[1] and match.status == 'FINISHED'
+    and (match.mode == 'CLASSIC' or match.mode == 'TIMED' or match.mode == 'VERSUS')
+    and type(match.caseId) == 'string' and #match.caseId > 0
+    and type(match.sagaEventId) == 'string' and #match.sagaEventId > 0
+    and type(match.correlationId) == 'string' and #match.correlationId > 0
+    and type(event.occurredAt) == 'string'
+    and event.correlationId == match.correlationId and type(payload) == 'table'
+    and payload.matchId == ARGV[1] and payload.caseId == match.caseId
+    and payload.mode == match.mode and type(payload.results) == 'table'
+    and type(payload.timeSeconds) == 'number' and payload.timeSeconds >= 0
+    and #payload.results == expected_count
+if valid then
+    for index, result in ipairs(payload.results) do
+        local participant = index == 1 and match.player1 or match.player2
+        if type(participant) ~= 'string' or #participant == 0
+            or type(result) ~= 'table' or result.userId ~= participant
+            or type(result.won) ~= 'boolean'
+            or (match.mode == 'CLASSIC' and (
+                type(result.difficulty) ~= 'string' or #result.difficulty == 0
+                or result.xpDelta ~= cjson.null
+            ))
+            or (match.mode ~= 'CLASSIC' and type(result.xpDelta) ~= 'number') then
+            valid = false
+            break
+        end
+    end
+end
+if not valid then
+    redis.call('HSET', KEYS[2], 'state', 'unrecoverable', 'reason', 'original_event_changed')
+    redis.call('ZREM', KEYS[4], ARGV[1])
+    redis.call('DEL', KEYS[3])
+    return 'unrecoverable'
+end
+local already_queued = false
+for _, list_key in ipairs({KEYS[6], KEYS[7]}) do
+    local recent = redis.call('LRANGE', list_key, 0, 199)
+    for _, queued_raw in ipairs(recent) do
+        local queued_ok, queued_event = pcall(cjson.decode, queued_raw)
+        if queued_ok and type(queued_event) == 'table' and queued_event.eventId == event.eventId then
+            already_queued = true
+            break
+        end
+    end
+    if already_queued then break end
+end
+if not already_queued then
+    local raw = cjson.encode(event)
+    redis.call('LPUSH', KEYS[6], raw)
+    redis.call('HINCRBY', KEYS[2], 'reemissions', 1)
+end
+redis.call('DEL', KEYS[3])
+redis.call('HSET', KEYS[2], 'state', 'pending')
+redis.call('ZADD', KEYS[4], ARGV[3], ARGV[1])
+return already_queued and 'already_queued' or 'requeued'
+"""
 
 _APPLY_SAGA_OUTCOME_SCRIPT = """
 local match_key = KEYS[1]
@@ -19,20 +280,19 @@ end
 if redis.call('GET', match_key) ~= expected_match then
     return 'retry'
 end
-if #KEYS > 1 then
-    if redis.call('TYPE', KEYS[2]).ok ~= 'none' and redis.call('TYPE', KEYS[2]).ok ~= 'zset' then
-        return 'redis_type_error'
-    end
-    for index = 3, #KEYS, 2 do
-        local key_type = redis.call('TYPE', KEYS[index]).ok
-        if key_type ~= 'none' and key_type ~= 'list' then
-            return 'redis_type_error'
-        end
-    end
-    for index = 2, #KEYS, 2 do
-        local result_index = ((index - 2) / 2) + 1
+local with_index = ARGV[#ARGV] == 'INDEX_V1'
+local participant_count = with_index and ((#KEYS - 5) / 2) or ((#KEYS - 1) / 2)
+if participant_count < 0 or participant_count % 1 ~= 0 then return 'redis_type_error' end
+if participant_count > 0 then
+    for result_index = 1, participant_count do
+        local ranking_key = KEYS[2 + ((result_index - 1) * 2)]
+        local history_key = KEYS[3 + ((result_index - 1) * 2)]
+        local ranking_type = redis.call('TYPE', ranking_key).ok
+        local history_type = redis.call('TYPE', history_key).ok
+        if ranking_type ~= 'none' and ranking_type ~= 'zset' then return 'redis_type_error' end
+        if history_type ~= 'none' and history_type ~= 'list' then return 'redis_type_error' end
         local argument_index = 4 + ((result_index - 1) * 3)
-        local current_score = tonumber(redis.call('ZSCORE', KEYS[index], ARGV[argument_index]) or '0')
+        local current_score = tonumber(redis.call('ZSCORE', ranking_key, ARGV[argument_index]) or '0')
         local increment = tonumber(ARGV[argument_index + 1])
         if not current_score or not increment then
             return 'invalid_score'
@@ -43,13 +303,30 @@ if #KEYS > 1 then
         end
     end
 end
+if with_index then
+    local index_key = 2 + (participant_count * 2)
+    local pending_type = redis.call('TYPE', KEYS[index_key]).ok
+    local due_type = redis.call('TYPE', KEYS[index_key + 1]).ok
+    if (pending_type ~= 'none' and pending_type ~= 'zset')
+        or (due_type ~= 'none' and due_type ~= 'zset') then
+        return 'redis_type_error'
+    end
+end
 
 redis.call('SET', match_key, ARGV[2], 'EX', ARGV[3])
-for index = 2, #KEYS, 2 do
-    local result_index = ((index - 2) / 2) + 1
+for result_index = 1, participant_count do
+    local ranking_key = KEYS[2 + ((result_index - 1) * 2)]
+    local history_key = KEYS[3 + ((result_index - 1) * 2)]
     local argument_index = 4 + ((result_index - 1) * 3)
-    redis.call('ZINCRBY', KEYS[index], ARGV[argument_index + 1], ARGV[argument_index])
-    redis.call('LPUSH', KEYS[index + 1], ARGV[argument_index + 2])
+    redis.call('ZINCRBY', ranking_key, ARGV[argument_index + 1], ARGV[argument_index])
+    redis.call('LPUSH', history_key, ARGV[argument_index + 2])
+end
+if with_index then
+    local index_key = 2 + (participant_count * 2)
+    local old_match = cjson.decode(ARGV[1])
+    redis.call('ZREM', KEYS[index_key], old_match.matchId)
+    redis.call('ZREM', KEYS[index_key + 1], old_match.matchId)
+    redis.call('DEL', KEYS[index_key + 2], KEYS[index_key + 3])
 end
 return 'applied'
 """
@@ -432,6 +709,10 @@ class MatchRepository:
                     event = final_match.get("matchFinishedEvent")
                     if event is not None:
                         pipeline.lpush(MATCH_EVENT_OUTBOX, json.dumps(event))
+                        if type(final_match.get("finishedAt")) is int:
+                            finished_at = int(final_match["finishedAt"])
+                            pipeline.zadd(PENDING_SAGAS, {match_id: finished_at})
+                            pipeline.zadd(SAGA_RECONCILIATION_DUE, {match_id: finished_at})
                     else:
                         pipeline.zincrby("ranking:global", score_delta, user_id)
                         pipeline.lpush(
@@ -482,6 +763,10 @@ class MatchRepository:
                 event = match_data.get("matchFinishedEvent")
                 if event is not None:
                     pipeline.lpush(MATCH_EVENT_OUTBOX, json.dumps(event))
+                    if type(match_data.get("finishedAt")) is int:
+                        finished_at = int(match_data["finishedAt"])
+                        pipeline.zadd(PENDING_SAGAS, {match_id: finished_at})
+                        pipeline.zadd(SAGA_RECONCILIATION_DUE, {match_id: finished_at})
                 pipeline.expire(
                     f"match:{match_id}:progress",
                     FINISHED_MATCH_TTL_SECONDS,
@@ -603,6 +888,13 @@ class MatchRepository:
                         json.dumps(history_entry),
                     ])
 
+            keys.extend([
+                PENDING_SAGAS,
+                SAGA_RECONCILIATION_DUE,
+                f"matches:saga:reconcile:{match_id}",
+                f"matches:saga:reconcile:{match_id}:lease",
+            ])
+            arguments.append("INDEX_V1")
             outcome = self.client.eval(
                 _APPLY_SAGA_OUTCOME_SCRIPT,
                 len(keys),
@@ -625,6 +917,99 @@ class MatchRepository:
 
     def list_open_match_ids(self) -> set:
         return self.client.smembers("matches:open")
+
+    def rebuild_pending_saga_index(self, scan_count: int = 500) -> int:
+        """Backfill the derived pending-saga index once without blocking Redis."""
+        if self.client.exists(SAGA_RECONCILIATION_INDEX_READY):
+            return 0
+        lock_key = f"{SAGA_RECONCILIATION_INDEX_READY}:lock"
+        if not self.client.set(lock_key, "1", nx=True, ex=300):
+            return 0
+        indexed = 0
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = self.client.scan(cursor=cursor, match="match:*", count=scan_count)
+                for key in keys:
+                    if not key.startswith("match:") or ":" in key[len("match:"):]:
+                        continue
+                    match_id = key[len("match:"):]
+                    with self.client.pipeline() as pipeline:
+                        try:
+                            pipeline.watch(key)
+                            raw = pipeline.get(key)
+                            if not raw:
+                                pipeline.unwatch()
+                                continue
+                            match = json.loads(raw)
+                            if (
+                                match.get("matchId") != match_id
+                                or match.get("sagaStatus") != "PENDING"
+                                or type(match.get("finishedAt")) is not int
+                            ):
+                                pipeline.unwatch()
+                                continue
+                            finished_at = match["finishedAt"]
+                            pipeline.multi()
+                            pipeline.zadd(PENDING_SAGAS, {match_id: finished_at})
+                            pipeline.zadd(SAGA_RECONCILIATION_DUE, {match_id: finished_at})
+                            pipeline.execute()
+                            indexed += 1
+                        except (redis.WatchError, TypeError, ValueError, AttributeError):
+                            continue
+                if cursor == 0:
+                    break
+            self.client.set(SAGA_RECONCILIATION_INDEX_READY, "1")
+            return indexed
+        finally:
+            self.client.delete(lock_key)
+
+    def claim_pending_sagas(
+        self,
+        *,
+        now: int,
+        limit: int,
+        min_age_seconds: int,
+        max_attempts: int,
+        lease_seconds: int,
+        token_prefix: str,
+    ) -> tuple[list[tuple[str, str, dict[str, Any]]], list[tuple[str, str]]]:
+        values = self.client.eval(
+            _CLAIM_SAGAS_SCRIPT,
+            2,
+            SAGA_RECONCILIATION_DUE,
+            PENDING_SAGAS,
+            str(now),
+            str(limit),
+            str(min_age_seconds),
+            str(max_attempts),
+            token_prefix,
+            str(lease_seconds),
+        )
+        return _decode_saga_claim_response(values)
+
+    def oldest_pending_saga_finished_at(self) -> Optional[int]:
+        oldest = self.client.zrange(PENDING_SAGAS, 0, 0, withscores=True)
+        return int(oldest[0][1]) if oldest else None
+
+    def reemit_pending_saga(
+        self, match_id: str, token: str, *, next_attempt_at: int
+    ) -> str:
+        result = self.client.eval(
+            _REEMIT_SAGA_SCRIPT,
+            7,
+            f"match:{match_id}",
+            f"matches:saga:reconcile:{match_id}",
+            f"matches:saga:reconcile:{match_id}:lease",
+            SAGA_RECONCILIATION_DUE,
+            PENDING_SAGAS,
+            MATCH_EVENT_OUTBOX,
+            MATCH_EVENT_INFLIGHT,
+            match_id,
+            token,
+            str(next_attempt_at),
+        )
+        return result
 
     def save_progress(self, match_id: str, user_id: str, progress: float) -> None:
         self.client.hset(f"match:{match_id}:progress", user_id, progress)

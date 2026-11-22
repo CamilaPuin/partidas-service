@@ -38,9 +38,20 @@ def test_lifespan_starts_and_stops_kafka_with_eureka(monkeypatch):
         async def stop(self):
             events.append("saga-stop")
 
+    class FakeReconciler:
+        def __init__(self, _repository):
+            pass
+
+        async def start(self):
+            events.append("reconciler-start")
+
+        async def stop(self):
+            events.append("reconciler-stop")
+
     monkeypatch.setattr(main, "EurekaClient", FakeEureka)
     monkeypatch.setattr(main, "KafkaPingRuntime", FakeKafka)
     monkeypatch.setattr(main, "MatchSagaRuntime", FakeSaga)
+    monkeypatch.setattr(main, "SagaReconciler", FakeReconciler)
 
     async def run_lifespan():
         async with main.lifespan(SimpleNamespace()):
@@ -52,7 +63,9 @@ def test_lifespan_starts_and_stops_kafka_with_eureka(monkeypatch):
         "eureka-start",
         "kafka-start",
         "saga-start",
+        "reconciler-start",
         "serving",
+        "reconciler-stop",
         "saga-stop",
         "kafka-stop",
         "eureka-stop",

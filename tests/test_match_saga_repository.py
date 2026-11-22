@@ -72,6 +72,9 @@ class ImmediatePipeline:
     def lpush(self, key, value):
         self.client.lists.setdefault(key, []).insert(0, value)
 
+    def zadd(self, _key, _mapping):
+        return 1
+
     def execute(self):
         return []
 
@@ -91,18 +94,18 @@ class FakeRedis:
     def eval(self, _script, number_of_keys, *values):
         keys = values[:number_of_keys]
         arguments = values[number_of_keys:]
+        with_index = arguments[-1] == "INDEX_V1"
+        participant_count = (number_of_keys - 5) // 2 if with_index else (number_of_keys - 1) // 2
         match_key = keys[0]
         if match_key not in self.values:
             return "retry"
         if self.values[match_key] != arguments[0]:
             return "retry"
-        if number_of_keys > 1:
-            if keys[1] in self.values:
-                return "redis_type_error"
-            if any(key in self.values for key in keys[2::2]):
+        if participant_count > 0:
+            if any(key in self.values for key in keys[1:1 + participant_count * 2]):
                 return "redis_type_error"
         self.values[match_key] = arguments[1]
-        for key_index in range(1, number_of_keys, 2):
+        for key_index in range(1, 1 + participant_count * 2, 2):
             result_index = (key_index - 1) // 2
             argument_index = 3 + result_index * 3
             user_id, xp_delta, history = arguments[argument_index:argument_index + 3]
