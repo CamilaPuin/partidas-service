@@ -10,6 +10,7 @@ from app.observability.http_metrics import (
     MATCH_SAGA_RECONCILIATION,
     MATCH_SAGA_RECONCILIATION_OLDEST_AGE,
     MATCH_SAGA_RECONCILIATION_PENDING,
+    SAGAS_PENDING,
 )
 from app.repositories.matches import SagaReconciliationResponseError
 
@@ -118,9 +119,9 @@ class SagaReconciler:
             if result == "requeued":
                 logger.warning("Re-emitted persisted match-finished event matchId=%s", match_id)
         try:
-            MATCH_SAGA_RECONCILIATION_PENDING.set(
-                self._repository.client.zcard("matches:saga:pending")
-            )
+            pending = self._repository.client.zcard("matches:saga:pending")
+            MATCH_SAGA_RECONCILIATION_PENDING.set(pending)
+            SAGAS_PENDING.set(pending)
             oldest = self._repository.oldest_pending_saga_finished_at()
             now = int(datetime.now(timezone.utc).timestamp())
             MATCH_SAGA_RECONCILIATION_OLDEST_AGE.set(

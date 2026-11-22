@@ -13,6 +13,23 @@ HTTP_REQUEST_DURATION = Histogram(
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
     registry=REGISTRY,
 )
+HTTP_REQUESTS = Counter(
+    "http_requests_total",
+    "Completed HTTP requests",
+    labelnames=("application", "method", "uri", "status"),
+    registry=REGISTRY,
+)
+EVENTS_PROCESSED = Counter(
+    "events_processed_total",
+    "Messaging events processed",
+    labelnames=("application", "event", "outcome"),
+    registry=REGISTRY,
+)
+SAGAS_PENDING = Gauge(
+    "sagas_pending",
+    "Matches waiting for a terminal saga outcome",
+    registry=REGISTRY,
+)
 MATCH_FINISHED_PUBLISHED = Counter(
     "match_finished_published_total",
     "MatchFinished events published from the durable Redis outbox",
@@ -78,9 +95,16 @@ class HttpRequestMetricsMiddleware:
         finally:
             route = scope.get("route")
             route_template = getattr(route, "path", "unmatched")
+            labels = {
+                "application": APPLICATION,
+                "method": normalized_method,
+                "uri": route_template,
+                "status": str(status_code),
+            }
             HTTP_REQUEST_DURATION.labels(
                 application=APPLICATION,
                 method=normalized_method,
                 uri=route_template,
                 status=str(status_code),
             ).observe(max(0.0, time.perf_counter() - started_at))
+            HTTP_REQUESTS.labels(**labels).inc()
