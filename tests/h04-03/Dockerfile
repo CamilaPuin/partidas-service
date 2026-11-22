@@ -9,4 +9,4 @@ COPY app ./app
 COPY tests ./tests
 COPY main.py ./main.py
 
-CMD ["python", "-m", "pytest", "-q", "tests"]
+CMD ["python", "-m", "pytest", "-q", "tests", "--ignore=tests/integration/test_h04_04_kafka_dlq.py"]

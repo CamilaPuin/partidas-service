@@ -26,7 +26,15 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: ["python", "-m", "pytest", "-q", "tests"]
+    command:
+      [
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests",
+        "--ignore=tests/integration/test_h04_04_kafka_dlq.py",
+      ]
     networks:
       - h04_test
 
