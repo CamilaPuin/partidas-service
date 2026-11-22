@@ -1,0 +1,69 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks: [h04_test]
+
+  kafka:
+    image: apache/kafka:4.4.0
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT"
+      KAFKA_LISTENERS: "INTERNAL://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86CL
+    tmpfs:
+      - /etc/kafka/secrets:uid=1000,gid=1000,mode=0755
+      - /mnt/shared/config:uid=1000,gid=1000,mode=0755
+      - /var/lib/kafka/data:uid=1000,gid=1000,mode=0755
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    networks: [h04_test]
+
+  pytest:
+    build:
+      context: ../..
+      dockerfile: tests/h04-05/Dockerfile
+    environment:
+      H04_TEST_REDIS_HOST: redis
+      H04_TEST_REDIS_PORT: "6379"
+      H04_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MATCH_SAGA_RECONCILIATION_INTERVAL_SECONDS: "1"
+      MATCH_SAGA_RECONCILIATION_MIN_AGE_SECONDS: "1"
+      MATCH_SAGA_RECONCILIATION_BACKOFF_SECONDS: "1"
+      MATCH_SAGA_RECONCILIATION_BACKOFF_MAX_SECONDS: "2"
+      PYTHONDONTWRITEBYTECODE: "1"
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    command: ["python", "-m", "pytest", "-q", "tests"]
+    networks: [h04_test]
+
+networks:
+  h04_test:
+    internal: true

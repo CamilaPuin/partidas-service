@@ -1,6 +1,6 @@
 import time
 
-from prometheus_client import CollectorRegistry, Counter, Histogram
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 
 APPLICATION = "partidas-service"
@@ -23,6 +23,22 @@ MATCH_SAGA_TRANSITIONS = Counter(
     "match_saga_transitions_total",
     "Terminal match result saga transitions applied",
     labelnames=("mode", "status"),
+    registry=REGISTRY,
+)
+MATCH_SAGA_RECONCILIATION = Counter(
+    "match_saga_reconciliation_total",
+    "Attempts and outcomes of pending match-saga reconciliation",
+    labelnames=("result",),
+    registry=REGISTRY,
+)
+MATCH_SAGA_RECONCILIATION_PENDING = Gauge(
+    "match_saga_reconciliation_pending",
+    "Number of indexed pending match sagas",
+    registry=REGISTRY,
+)
+MATCH_SAGA_RECONCILIATION_OLDEST_AGE = Gauge(
+    "match_saga_reconciliation_oldest_age_seconds",
+    "Age of the oldest indexed pending match saga",
     registry=REGISTRY,
 )
 
