@@ -9,7 +9,8 @@
   que `origin/main` contenía #14 y que el árbol estaba limpio, se avanzó `main`
   con `git merge --ff-only origin/main` y se creó
   `fix/h04-04-kafka-outcome-dlq` desde `c22da94`.
-- No se crearon commits, pushes ni Pull Requests.
+- Durante la implementación inicial no se crearon commits, pushes ni Pull
+  Requests; la publicación posterior se documenta en la sección J.
 
 ## B. Diagnóstico
 
@@ -101,7 +102,13 @@ headers y criterios está en `h04-04-kafka-outcome-consumer.md`.
 **Ejecución pendiente:** el intento de pytest se detuvo en la primera prueba
 asíncrona tras 30 segundos. También se observó que el entorno local Windows
 (.venv Python 3.13.1) no terminaba ni un `asyncio.run(asyncio.sleep(0))`. No se
-declara aprobada ninguna de las 21 pruebas recopiladas.
+completó la ejecución dinámica desde ese entorno local.
+
+**Ejecución real posterior reportada por el usuario:**
+`tests/run_h04_04_isolated.ps1` terminó con **177 aprobadas, 0 fallidas y código
+de salida 0**, usando Kafka y Redis reales dentro del entorno aislado. El usuario
+confirmó que los contenedores y la red temporales se eliminaron. Esta ejecución
+posterior reemplaza el bloqueo de ejecución local indicado arriba.
 
 ## G. Integración real
 
@@ -113,29 +120,28 @@ El runner está listo; el comando desde PowerShell, en la raíz de
 ```
 
 Incluye las regresiones existentes de CLASSIC, TIMED, VERSUS, HTTP, saga y Lua
-Redis, junto con las pruebas H04-04 y una integración Kafka/Redis real. En este
-entorno `docker info` terminó con código `1`; no se inició ningún contenedor.
-Por tanto, Kafka real, Redis real, DLQ efectiva, recuperación tras reinicio y
-las regresiones completas permanecen pendientes de ejecución en el PowerShell
-del usuario.
+Redis, junto con las pruebas H04-04 y una integración Kafka/Redis real. El
+usuario ejecutó el runner desde PowerShell con Kafka y Redis aislados y reportó
+177 aprobadas, ninguna fallida, código de salida 0 y limpieza de los recursos
+temporales.
 
 La prueba de integración automatizada cubre publicación efectiva en DLQ,
 confirmación posterior, evento inválido seguido de válido en la misma
-partición, duplicación y replay después de reiniciar el consumidor. Fallo
-físico del broker, caída real de Redis y rebalance entre dos procesos no se
-simulan como si fueran fallos de infraestructura; requieren validación externa.
+partición, duplicación y replay después de reiniciar el consumidor. La ejecución
+completa comunicada por el usuario pasó. Fallo físico del broker, caída real de
+Redis y rebalance entre dos procesos no forman parte de la evidencia de esa
+ejecución y siguen pendientes de una validación específica.
 
 ## H. Compatibilidad
 
 No se modificaron contratos Kafka de `matches.finished.v1` ni
 `matches.saga.confirmed.v1`, reglas XP, transiciones de negocio ni el servicio de
 Usuarios. El publicador outbox permanece en el runtime y conserva la recuperación
-de mensajes en vuelo H04-01. Las pruebas de regresión existentes se ejecutarán
-con el runner, pero no se pudieron ejecutar en esta sesión.
+de mensajes en vuelo H04-01. Las regresiones existentes quedaron cubiertas por
+la ejecución del runner reportada por el usuario.
 
 ## I. Riesgos pendientes
 
-- Ejecutar el runner real y corregir cualquier fallo que revele el entorno Linux.
 - Validar rebalance con dos consumidores/procesos y caída/reinicio real de Kafka.
 - Validar una indisponibilidad real de Redis mientras se procesa un mensaje.
 - Provisionar DLQ, retención y permisos Kafka antes del despliegue.
@@ -144,17 +150,19 @@ con el runner, pero no se pudieron ejecutar en esta sesión.
 
 ## J. Estado Git
 
-Los cambios se limitan a consumidor, documentación y pruebas H04-04 (más la
-actualización del documento H04-03 para retirar la nota pendiente). La rama es
-`fix/h04-04-kafka-outcome-dlq`, basada en `c22da94`. `git diff --check` pasó.
-No se hicieron commits, pushes ni Pull Requests.
+El commit `bae36d6c97a4ed71a269f90294fed2c046618db0` se publicó en la rama
+`fix/h04-04-kafka-outcome-dlq`. El Pull Request [#15](https://github.com/CamilaPuin/partidas-service/pull/15)
+se fusionó en `main` mediante el merge `8b019487208796adcd2c406d36b4673311c63ed8`.
+El checkout local se avanzó fast-forward desde `c22da94` hasta ese merge. Este
+ajuste posterior al informe queda como un único cambio local sin commit; no se
+creó otro commit, push ni Pull Request.
 
 ## K. Recomendación
 
-**PENDIENTE DE VALIDACIÓN.** La política, implementación y runner aislado están
-preparados, pero no recomiendo aprobar hasta ejecutar las pruebas unitarias y
-la integración real con el runner PowerShell. La evidencia estática no
-sustituye esas ejecuciones.
+**APROBAR CON OBSERVACIONES.** La ejecución real aislada comunicada por el
+usuario finalizó con 177 aprobadas, 0 fallidas y código 0. Quedan como
+observaciones la validación específica de rebalances entre procesos, caídas
+físicas de Kafka/Redis y la provisión operativa del topic DLQ.
 
 ## Seguimiento de los dos fallos del runner
 
@@ -181,7 +189,6 @@ failed`. La causa de ambos se identificó y se añadió regresión:
 La corrección del test de offset es de sincronización/observabilidad; no se
 encontró un fallo productivo de commit. La operación repetida del consumidor
 era segura frente al Redis real, aunque innecesaria dentro del mismo proceso;
-queda optimizada. La nueva ejecución del runner no se pudo realizar desde este
-entorno porque `docker info` no pudo conectarse al Engine y pytest asíncrono se
-atascó en Windows, por lo que ambos fallos todavía deben confirmarse corregidos
-con el runner PowerShell antes de aprobar.
+queda optimizada. El usuario volvió a ejecutar el runner y reportó 177
+aprobadas, 0 fallidas y código 0 con Kafka y Redis reales aislados. La prueba
+externa confirma que los dos fallos dejaron de reproducirse.
