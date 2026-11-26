@@ -12,6 +12,8 @@ from app.application.errors import (
     UserResultConflict,
 )
 
+_CASE_DIFFICULTIES = {"EASY", "MEDIUM", "HARD", "EXPERT"}
+
 
 def _eureka_registry_url() -> str:
     eureka_server = os.getenv("EUREKA_SERVER")
@@ -221,7 +223,7 @@ def get_case_difficulty(case_id: str) -> str:
     if not isinstance(response, dict):
         raise CasesServiceError("CASOS-SERVICE devolvió un caso inválido")
     difficulty = response.get("difficulty")
-    if not isinstance(difficulty, str) or difficulty not in {"EASY", "MEDIUM", "HARD"}:
+    if not isinstance(difficulty, str) or difficulty not in _CASE_DIFFICULTIES:
         raise CasesServiceError(
             "CASOS-SERVICE devolvió una dificultad no reconocida"
         )
@@ -268,7 +270,7 @@ def _validate_case_summary(response: Any) -> Dict[str, Any]:
         not isinstance(case_id, str)
         or not case_id.strip()
         or not isinstance(difficulty, str)
-        or difficulty not in {"EASY", "MEDIUM", "HARD"}
+        or difficulty not in _CASE_DIFFICULTIES
         or type(response.get("requiredLevel")) is not int
         or response["requiredLevel"] < 1
     ):

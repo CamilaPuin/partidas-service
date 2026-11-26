@@ -84,7 +84,7 @@ def test_get_case_difficulty_uses_internal_cases_request(monkeypatch):
 
     class CaseResponse(FakeResponse):
         def read(self):
-            return b'{"id":"case-1","difficulty":"HARD"}'
+            return b'{"id":"case-1","difficulty":"EXPERT"}'
 
     def fake_urlopen(request, timeout):
         seen["request"] = request
@@ -92,7 +92,7 @@ def test_get_case_difficulty_uses_internal_cases_request(monkeypatch):
         return CaseResponse()
 
     monkeypatch.setattr(service_clients, "urlopen", fake_urlopen)
-    assert service_clients.get_case_difficulty("case-1") == "HARD"
+    assert service_clients.get_case_difficulty("case-1") == "EXPERT"
     assert seen["request"].full_url.endswith("/cases/case-1")
     assert seen["request"].get_header("X-gateway-secret") == "secret-test"
 
@@ -129,7 +129,8 @@ def test_list_case_summaries_uses_cases_catalog_and_gateway_secret(monkeypatch):
 
     class CatalogResponse(FakeResponse):
         def read(self):
-            return b'[{"id":"case-1","difficulty":"EASY","requiredLevel":1}]'
+            return b'[{"id":"case-1","difficulty":"EASY","requiredLevel":1},' \
+                b'{"id":"case-expert","difficulty":"EXPERT","requiredLevel":15}]'
 
     def fake_urlopen(request, timeout):
         seen["request"] = request
@@ -138,7 +139,8 @@ def test_list_case_summaries_uses_cases_catalog_and_gateway_secret(monkeypatch):
     monkeypatch.setattr(service_clients, "urlopen", fake_urlopen)
 
     assert service_clients.list_case_summaries() == [
-        {"id": "case-1", "difficulty": "EASY", "requiredLevel": 1}
+        {"id": "case-1", "difficulty": "EASY", "requiredLevel": 1},
+        {"id": "case-expert", "difficulty": "EXPERT", "requiredLevel": 15},
     ]
     assert seen["request"].full_url.endswith("/cases")
     assert seen["request"].get_header("X-gateway-secret") == "secret-test"
