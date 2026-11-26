@@ -1,5 +1,6 @@
 import json
 import math
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -335,6 +336,28 @@ return 'applied'
 class MatchRepository:
     def __init__(self, client: redis.Redis):
         self.client = client
+
+    @contextmanager
+    def versus_matchmaking_lock(self):
+        """Serialize the find-or-create decision across all API instances."""
+        lock = self.client.lock(
+            "matches:versus:matchmaking-lock",
+            timeout=90,
+            blocking_timeout=8,
+        )
+        acquired = lock.acquire()
+        if not acquired:
+            from app.application.errors import MatchmakingBusy
+
+            raise MatchmakingBusy("La cola de emparejamiento está ocupada")
+        try:
+            yield
+        finally:
+            try:
+                lock.release()
+            except redis.exceptions.LockError:
+                # The lease expired; another request owns the lock now.
+                pass
 
     @staticmethod
     def _is_valid_user_id(user_id: Any) -> bool:

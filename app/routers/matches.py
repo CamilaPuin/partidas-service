@@ -10,6 +10,7 @@ from app.application.errors import (
     IncorrectSolution,
     MatchConflict,
     MatchLocked,
+    MatchmakingBusy,
     MatchNotFound,
     MatchUnavailable,
     NoEligibleCase,
@@ -255,7 +256,7 @@ def finish_timed_match(
         200: {"description": "Partida versus creada"},
         409: {"description": "El usuario no tiene casos disponibles para jugar"},
         502: {"description": "Progresión o historial de usuario no disponible"},
-        503: {"description": "Catálogo de casos no disponible"},
+        503: {"description": "Catálogo de casos o cola de emparejamiento no disponible"},
         422: {"description": "Solicitud inválida"},
     },
 )
@@ -269,6 +270,11 @@ def create_versus_match(
         raise HTTPException(
             status_code=409,
             detail="No hay casos disponibles que puedas jugar y no hayas resuelto",
+        ) from exc
+    except MatchmakingBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="El emparejamiento está ocupado. Reintentando…",
         ) from exc
     except CasesServiceError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -285,6 +291,7 @@ def create_versus_match(
         403: {"description": "Solo el creador puede cancelar la sala"},
         404: {"description": "Partida no encontrada"},
         409: {"description": "La sala ya no está esperando"},
+        503: {"description": "La cola de emparejamiento está ocupada"},
     },
 )
 def cancel_versus_match(
@@ -293,6 +300,11 @@ def cancel_versus_match(
 ):
     try:
         return match_service.cancel_versus_match(match_id, user_id)
+    except MatchmakingBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="El emparejamiento está ocupado. Reintenta en unos segundos",
+        ) from exc
     except MatchNotFound as exc:
         raise HTTPException(status_code=404, detail="Partida no encontrada") from exc
     except OwnMatch as exc:
@@ -322,7 +334,7 @@ def list_open_matches(_user_id: str = Depends(get_current_user_id)):
         404: {"description": "Partida no encontrada"},
         409: {"description": "Los jugadores no comparten un caso elegible"},
         502: {"description": "Progresión o historial de usuario no disponible"},
-        503: {"description": "Catálogo de casos no disponible"},
+        503: {"description": "Catálogo de casos o cola de emparejamiento no disponible"},
         200: {"description": "Partida unida correctamente"},
         422: {"description": "Solicitud inválida"},
     },
@@ -333,6 +345,11 @@ def join_versus_match(
 ):
     try:
         return match_service.join_versus_match(match_id, user_id)
+    except MatchmakingBusy as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="El emparejamiento está ocupado. Reintenta en unos segundos",
+        ) from exc
     except NoEligibleCase as exc:
         raise HTTPException(
             status_code=409,

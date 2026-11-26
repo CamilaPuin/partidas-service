@@ -1,3 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from threading import RLock, Barrier
+
 import pytest
 
 from app.application.errors import NoEligibleCase, OwnMatch
@@ -17,6 +21,12 @@ class FakeStore:
         self.matches = {}
         self.open_matches = set()
         self.published_progress = []
+        self._matchmaking_lock = RLock()
+
+    @contextmanager
+    def versus_matchmaking_lock(self):
+        with self._matchmaking_lock:
+            yield
 
     def get_match(self, match_id):
         match = self.matches.get(match_id)
@@ -134,6 +144,40 @@ def test_versus_cannot_create_room_without_any_unresolved_case_at_current_level(
 
     assert store.matches == {}
     assert store.open_matches == set()
+
+
+def test_simultaneous_queue_requests_match_into_one_room():
+    service, store = build_service()
+    start = Barrier(2)
+
+    def queue(user_id):
+        start.wait()
+        return service.create_versus_match(user_id)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        host_future = pool.submit(queue, "host")
+        guest_future = pool.submit(queue, "guest")
+        host = host_future.result()
+        guest = guest_future.result()
+
+    assert guest["matchId"] == host["matchId"]
+    final_match = store.matches[host["matchId"]]
+    assert final_match["status"] == "IN_PROGRESS"
+    assert {final_match["player1"], final_match["player2"]} == {"host", "guest"}
+    assert final_match["caseId"] in {case["id"] for case in CASES}
+    assert store.open_matches == set()
+    assert len(store.matches) == 1
+
+
+def test_repeated_create_request_reuses_players_waiting_room():
+    service, store = build_service()
+    first = service.create_versus_match("host")
+
+    repeated = service.create_versus_match("host")
+
+    assert repeated == first
+    assert store.open_matches == {first["matchId"]}
+    assert len(store.matches) == 1
 
 
 def test_versus_progress_includes_server_assigned_case():

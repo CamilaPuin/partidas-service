@@ -7,6 +7,7 @@ from app.application.errors import (
     IncorrectSolution,
     MatchConflict,
     MatchLocked,
+    MatchmakingBusy,
     MatchNotFound,
     MatchUnavailable,
     NoEligibleCase,
@@ -213,29 +214,54 @@ class MatchService:
         self,
         user_id: str,
     ) -> Dict[str, Any]:
-        if not self._eligible_versus_cases([user_id]):
-            raise NoEligibleCase
-        match_id = self.ids.new_id()
-        match_data = {
-            "matchId": match_id,
-            "caseId": None,
-            "status": "WAITING",
-            "player1": user_id,
-            "player1Name": self.users.get_display_name(user_id),
-            "player2": None,
-            "player2Name": None,
-            "winnerId": None,
-            "mode": "VERSUS",
-        }
-        self.repository.save_match(match_id, match_data)
-        self.repository.add_open_match(match_id)
-        return {
-            "matchId": match_id,
-            "caseId": None,
-            "status": "WAITING",
-            "player1": user_id,
-            "player1Name": match_data["player1Name"],
-        }
+        try:
+            with self.repository.versus_matchmaking_lock():
+                if not self._eligible_versus_cases([user_id]):
+                    raise NoEligibleCase
+
+                # A prior request may have created the room even if its response
+                # was lost. Reuse it instead of leaving the same player in two rooms.
+                open_ids = sorted(self.repository.list_open_match_ids())
+                for open_id in open_ids:
+                    waiting = self.repository.get_match(open_id)
+                    if not waiting or waiting.get("status") != "WAITING":
+                        self.repository.remove_open_match(open_id)
+                        continue
+                    if waiting.get("player1") == user_id:
+                        return self._waiting_versus_dto(waiting)
+
+                # Joining under the same lock prevents two players who clicked
+                # simultaneously from creating separate rooms for each other.
+                for open_id in open_ids:
+                    waiting = self.repository.get_match(open_id)
+                    if (
+                        not waiting
+                        or waiting.get("status") != "WAITING"
+                        or waiting.get("player1") == user_id
+                    ):
+                        continue
+                    try:
+                        return self._join_versus_match_locked(open_id, user_id)
+                    except NoEligibleCase:
+                        continue
+
+                match_id = self.ids.new_id()
+                match_data = {
+                    "matchId": match_id,
+                    "caseId": None,
+                    "status": "WAITING",
+                    "player1": user_id,
+                    "player1Name": self.users.get_display_name(user_id),
+                    "player2": None,
+                    "player2Name": None,
+                    "winnerId": None,
+                    "mode": "VERSUS",
+                }
+                self.repository.save_match(match_id, match_data)
+                self.repository.add_open_match(match_id)
+                return self._waiting_versus_dto(match_data)
+        except MatchmakingBusy:
+            raise
 
     def list_open_matches(self) -> List[Dict[str, Any]]:
         matches = []
@@ -254,6 +280,10 @@ class MatchService:
         return matches
 
     def join_versus_match(self, match_id: str, user_id: str) -> Dict[str, Any]:
+        with self.repository.versus_matchmaking_lock():
+            return self._join_versus_match_locked(match_id, user_id)
+
+    def _join_versus_match_locked(self, match_id: str, user_id: str) -> Dict[str, Any]:
         match_data = self.repository.get_match(match_id)
         if not match_data:
             raise MatchNotFound
@@ -288,7 +318,21 @@ class MatchService:
             "startedAt": match_data["startedAt"],
         }
 
+    @staticmethod
+    def _waiting_versus_dto(match_data: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "matchId": match_data["matchId"],
+            "caseId": None,
+            "status": "WAITING",
+            "player1": match_data["player1"],
+            "player1Name": match_data.get("player1Name"),
+        }
+
     def cancel_versus_match(self, match_id: str, user_id: str) -> Dict[str, Any]:
+        with self.repository.versus_matchmaking_lock():
+            return self._cancel_versus_match_locked(match_id, user_id)
+
+    def _cancel_versus_match_locked(self, match_id: str, user_id: str) -> Dict[str, Any]:
         match_data = self.repository.get_match(match_id)
         if not match_data:
             raise MatchNotFound

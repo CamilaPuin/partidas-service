@@ -26,6 +26,10 @@ class NoEligibleCase(Exception):
     pass
 
 
+class MatchmakingBusy(Exception):
+    pass
+
+
 class ServiceIntegrationError(Exception):
     pass
 
